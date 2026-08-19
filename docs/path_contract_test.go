@@ -103,3 +103,62 @@ func TestSubmissionDocumentsUseRelativeFilePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestFinalReportHasNoLocalMarkdownDestinations(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "relative link", value: `[Day 1](day-01.md)`, want: true},
+		{name: "relative image", value: `![evidence](assets/evidence.png)`, want: true},
+		{name: "relative reference link", value: "[Day 1][day-1]\n\n[day-1]: docs/reports/day-01.md", want: true},
+		{name: "HTTP link", value: `[reference](http://example.test/reference)`, want: false},
+		{name: "HTTPS link", value: `[reference](https://example.test/reference)`, want: false},
+		{name: "HTTPS reference link", value: "[reference][docs]\n\n[docs]: https://example.test/reference", want: false},
+		{name: "anchor link", value: `[section](#section)`, want: false},
+		{name: "mail link", value: `[contact](mailto:owner@example.test)`, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := len(localMarkdownDestinations([]byte(test.value))) > 0
+			if got != test.want {
+				t.Fatalf("local Markdown destination for %q = %v, want %v", test.value, got, test.want)
+			}
+		})
+	}
+
+	contents, err := os.ReadFile(filepath.Join("reports", "day-09-final.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destinations := localMarkdownDestinations(contents); len(destinations) > 0 {
+		t.Fatalf("final report contains local Markdown destinations %q; write repository-root-relative evidence paths as inline code", destinations)
+	}
+}
+
+func localMarkdownDestinations(contents []byte) []string {
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`!?\[[^\]\r\n]*\]\(\s*([^)]+?)\s*\)`),
+		regexp.MustCompile(`(?m)^[ \t]{0,3}\[[^\]\r\n]+\]:[ \t]*(.+?)[ \t]*$`),
+	}
+	var destinations []string
+	for _, pattern := range patterns {
+		for _, match := range pattern.FindAllSubmatch(contents, -1) {
+			destination := strings.TrimSpace(string(match[1]))
+			if strings.HasPrefix(destination, "<") {
+				if end := strings.Index(destination, ">"); end >= 0 {
+					destination = destination[1:end]
+				}
+			} else if fields := strings.Fields(destination); len(fields) > 0 {
+				destination = fields[0]
+			}
+			lower := strings.ToLower(destination)
+			if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "mailto:") || strings.HasPrefix(destination, "#") {
+				continue
+			}
+			destinations = append(destinations, destination)
+		}
+	}
+	return destinations
+}

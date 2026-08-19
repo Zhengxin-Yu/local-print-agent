@@ -11,7 +11,7 @@
 
 当前可复现的主证据是 Windows `demo` 模式：浏览器由脚本自动发现，`/health` 返回 `service=local-print-agent`、`status=ok`、API `v1`，打印机为“Mock Printer（不执行实体打印）”；任务 `809b3c736979ffe2ac9466441f8c4fa2` 最终为 `succeeded`、`attempts=1`，预览返回 HTTP 200、`application/pdf`、35,180 bytes，停止后端口释放。该证据没有访问操作系统打印队列。
 
-自动验证基线为 141 个顶层测试：135 通过、6 跳过、0 失败；11 个含测试包通过，race 检查 11 个包且 0 race，vet、module verify 和 diff 检查通过。Windows 平台适配器已由受控 runner 验证；Linux 适配器及其受控边界测试代码已交叉编译，但没有在 Linux 内核运行，也没有 CUPS request id。真人同学仅看 README 启动、Windows 安全虚拟/系统队列录屏、Linux/CUPS runtime 与录屏均未完成。本报告不以 Fake Printer、受控 runner、Windows demo、交叉编译、历史截图或代理审查替代这些人工证据，也不声称录屏已经独立完成。
+自动验证基线为 142 个顶层测试：136 通过、6 跳过、0 失败；11 个含测试包通过，race 检查 11 个包且 0 race，vet、module verify 和 diff 检查通过。Windows 平台适配器已由受控 runner 验证；Linux 适配器及其受控边界测试代码已交叉编译，但没有在 Linux 内核运行，也没有 CUPS request id。真人同学仅看 README 启动、Windows 安全虚拟/系统队列录屏、Linux/CUPS runtime 与录屏均未完成。本报告不以 Fake Printer、受控 runner、Windows demo、交叉编译、历史截图或代理审查替代这些人工证据，也不声称录屏已经独立完成。
 
 ## 2. 课题背景与项目目标
 
@@ -30,9 +30,24 @@
 
 ## 3. 必做、不做与最终范围
 
-### 3.1 Day 1 必做
+### 3.1 必做与不做矩阵
 
-Day 1 在 `docs/reports/day-01.md` 记录的必做是：两类打印（原文为“HTML 与 PDF”）、任务队列、任务状态、失败原因、Windows/Linux 支持、README、录屏。本项目没有用新增功能掩盖未完成项，最终状态在第 15 节逐项列出。
+Day 1 的必做和不做范围来自 `docs/reports/day-01.md`。本项目没有用新增功能掩盖未完成项；状态与第 15 节一致。
+
+| 类别 | 项目 | 最终状态/适用性 | 证据或影响 |
+| --- | --- | --- | --- |
+| 必做 | 两类打印（原文“HTML 与 PDF”） | 部分完成 | `internal/render/` 和 `templates/` 实现气球/源码 HTML -> PDF；没有任意 HTML 输入或现成 PDF 上传 |
+| 必做 | 任务队列 | 完成 | `internal/jobs/service.go`、`internal/worker/worker.go`；容量 100 的单 Worker FIFO |
+| 必做 | 任务状态 | 完成 | `internal/jobs/state.go`；5 个状态和失败重试路径 |
+| 必做 | 失败原因 | 完成 | `internal/jobs/model.go`、`docs/api.md`；稳定错误码和可读消息 |
+| 必做 | Windows/Linux 支持 | 部分完成 | 两个平台 Adapter 已实现；Windows 系统队列、Linux/CUPS runtime 和录屏未完成 |
+| 必做 | README | 完成 | `README.md` 和 Windows demo 干净副本证据；真人同学验收未完成 |
+| 必做 | 录屏 | 未完成 | `docs/demo-script.md` 已完成，但仓库没有实际录像文件 |
+| 不做 | 完整 OJ、判题、榜单 | 不适用，保持不做 | CCPCOJ 只作现场语境参考，不集成 |
+| 不做 | 账号与权限系统 | 不适用，保持不做 | 当前服务固定为本机回环工具 |
+| 不做 | 浏览器插件、桌面 GUI、云打印 | 不适用，保持不做 | Web 只调用本机 HTTP API |
+| 不做 | 自研打印机驱动 | 不适用，保持不做 | 平台边界使用 SumatraPDF 或 CUPS |
+| 不做 | Lodop 集成 | 不适用，保持不做 | Lodop 只作商业方案比较 |
 
 ### 3.2 范围澄清
 
@@ -40,7 +55,7 @@ Day 1 在 `docs/reports/day-01.md` 记录的必做是：两类打印（原文为
 
 其余核心范围没有扩大：状态机、FIFO、失败原因、Windows/Linux Adapter、README 和演示材料仍与 Day 1 对齐。Day 9 只整理报告。
 
-### 3.3 不做范围
+### 3.3 不做边界说明
 
 不实现完整 OJ、账号与权限系统、浏览器插件、桌面 GUI、云打印、自研打印机驱动或 Lodop 集成；不做并行打印、多进程数据库或 exactly-once 的操作系统提交；不接受客户端文件路径；不向未经确认的实体或交互式虚拟打印目标试投。
 
@@ -109,13 +124,18 @@ sequenceDiagram
     A-->>B: 202 + Job
     W->>J: rendering, attempts + 1
     W->>R: Render(Job)
-    R-->>W: preview.pdf
-    W->>J: printing + pdf_path
-    W->>P: Print(printer, preview.pdf)
-    alt adapter accepts
-        W->>J: succeeded
-    else render or print fails
-        W->>J: failed + stable error
+    alt render fails
+        R-->>W: render error
+        W->>J: failed + stable render error
+    else render succeeds
+        R-->>W: preview.pdf
+        W->>J: printing + pdf_path
+        W->>P: Print(printer, preview.pdf)
+        alt adapter accepts
+            W->>J: succeeded
+        else print fails
+            W->>J: failed + stable print error
+        end
     end
     B->>A: GET detail or preview
     A->>J: load Job
@@ -183,7 +203,7 @@ Mock Web 嵌入可执行文件，自动发现 17653-17660 中返回正确 health
 
 `internal/render/balloon.go` 只接受气球 Job，并严格解码 payload；`internal/render/pdf.go` 将生成的 HTML 写入私有 job 目录，再由 Chrome/Chromium 生成 `preview.pdf`。Day 5 的真实 Chrome 151 证据显示小票为 1 页，截图如下：
 
-![Day 5 气球小票真实 PDF 截图](assets/day-05-balloon.png)
+截图文件：`docs/reports/assets/day-05-balloon.png`（Day 5 气球小票真实 PDF）。
 
 该截图证明历史 PDF 版式，不证明任何系统队列接受或物理出纸。
 
@@ -195,9 +215,9 @@ Mock Web 嵌入可执行文件，自动发现 17653-17660 中返回正确 health
 
 Day 5 的 140 行中文 C++ fixture 生成 6 页；几何测试测量前两页的页眉线、正文和页码间隔。截图只作为已有渲染证据：
 
-![Day 5 源码 PDF 首页](assets/day-05-source-page-1.png)
+截图文件：`docs/reports/assets/day-05-source-page-1.png`（Day 5 源码 PDF 首页）。
 
-![Day 5 源码 PDF 第二页](assets/day-05-source-page-2.png)
+截图文件：`docs/reports/assets/day-05-source-page-2.png`（Day 5 源码 PDF 第二页）。
 
 Day 7 的当轮真实 Chrome 复验曾被 `context canceled` 环境限制阻断，因此本报告同时保留两条事实：Day 5 有真实 Chrome 历史证据；后续受限环境没有重新证明该 E2E。
 
@@ -258,11 +278,11 @@ Windows Adapter 构造时要求 SumatraPDF 文件；枚举后会重新检查目�
 
 ### 13.3 最终统计
 
-当前完整验证采用 `GOTOOLCHAIN=local`，并从项目相对 `.cache/task-15-verify` 解析实际 `GOCACHE`。与代码和 Day 8 一致的统计为：
+当前最终完整验证在 Day 8 的 141/135 历史基线上增加本报告路径契约测试，采用 `GOTOOLCHAIN=local`，并从项目相对 `.cache/task-15-fix-verify` 解析实际 `GOCACHE`。当前统计为：
 
 | 命令 | 结果 |
 | --- | --- |
-| `go test ./... -count=1` | 141 个顶层测试：135 pass、6 skip、0 fail；11 个含测试包通过，`templates` 无测试文件 |
+| `go test ./... -count=1` | 142 个顶层测试：136 pass、6 skip、0 fail；11 个含测试包通过，`templates` 无测试文件 |
 | `go test -race ./... -count=1` | 11 个含测试包通过，0 race；`templates` 无测试文件 |
 | `go vet ./...` | exit 0，无诊断 |
 | `go mod verify` | `all modules verified` |
@@ -381,28 +401,28 @@ AI/代理审查不是同学验收、操作系统打印队列证据或真人录�
 
 | Day | 主题 | 报告 |
 | --- | --- | --- |
-| 1 | 范围、主路径与验收口径 | [docs/reports/day-01.md](day-01.md) |
-| 2 | 系统组成、需求映射与技术选型 | [docs/reports/day-02.md](day-02.md) |
-| 3 | 主路径对象、成功失败约定与假实现 | [docs/reports/day-03.md](day-03.md) |
-| 4 | 环境起步、Mock Web 与审查 | [docs/reports/day-04.md](day-04.md) |
-| 5 | 真实 Chrome PDF 与可演示版本 | [docs/reports/day-05.md](day-05.md) |
-| 6 | Windows/Linux Adapter 与两类模块 | [docs/reports/day-06.md](day-06.md) |
-| 7 | 回归、真实问题与遗留项 | [docs/reports/day-07.md](day-07.md) |
-| 8 | 交付准备、干净启动与人工缺口 | [docs/reports/day-08.md](day-08.md) |
-| 9 | 结课报告与最终归档 | [docs/reports/day-09-final.md](day-09-final.md) |
+| 1 | 范围、主路径与验收口径 | `docs/reports/day-01.md` |
+| 2 | 系统组成、需求映射与技术选型 | `docs/reports/day-02.md` |
+| 3 | 主路径对象、成功失败约定与假实现 | `docs/reports/day-03.md` |
+| 4 | 环境起步、Mock Web 与审查 | `docs/reports/day-04.md` |
+| 5 | 真实 Chrome PDF 与可演示版本 | `docs/reports/day-05.md` |
+| 6 | Windows/Linux Adapter 与两类模块 | `docs/reports/day-06.md` |
+| 7 | 回归、真实问题与遗留项 | `docs/reports/day-07.md` |
+| 8 | 交付准备、干净启动与人工缺口 | `docs/reports/day-08.md` |
+| 9 | 结课报告与最终归档 | `docs/reports/day-09-final.md` |
 
 ### 20.2 文档与证据索引
 
 | 材料 | 路径 | 用途 |
 | --- | --- | --- |
-| 项目入口 | [README.md](../../README.md) | 安装、运行、配置、限制 |
-| API | [docs/api.md](../api.md) | 7 个接口的请求、响应和命令 |
-| 测试说明 | [docs/testing.md](../testing.md) | 安全边界、失败注入和 opt-in E2E |
-| 演示脚本 | [docs/demo-script.md](../demo-script.md) | 固定 8 分钟安全 demo 顺序 |
-| 气球输入 | [testdata/balloon.json](../../testdata/balloon.json) | 气球验收数据 |
-| 源码输入 | [testdata/source_cpp.json](../../testdata/source_cpp.json) | 140 行多页源码数据 |
-| Day 1 health | [docs/reports/assets/day-01-health.png](assets/day-01-health.png) | 早期 health 真实响应截图 |
-| Day 4 Web | [docs/reports/assets/day-04-console.png](assets/day-04-console.png) | Mock Web 运行截图 |
+| 项目入口 | `README.md` | 安装、运行、配置、限制 |
+| API | `docs/api.md` | 7 个接口的请求、响应和命令 |
+| 测试说明 | `docs/testing.md` | 安全边界、失败注入和 opt-in E2E |
+| 演示脚本 | `docs/demo-script.md` | 固定 8 分钟安全 demo 顺序 |
+| 气球输入 | `testdata/balloon.json` | 气球验收数据 |
+| 源码输入 | `testdata/source_cpp.json` | 140 行多页源码数据 |
+| Day 1 health | `docs/reports/assets/day-01-health.png` | 早期 health 真实响应截图 |
+| Day 4 Web | `docs/reports/assets/day-04-console.png` | Mock Web 运行截图 |
 | Day 5 PDFs | `docs/reports/assets/day-05-balloon.png`、`docs/reports/assets/day-05-source-page-1.png`、`docs/reports/assets/day-05-source-page-2.png` | 历史真实 Chrome PDF 版式证据 |
 
 没有 Windows/Linux 录屏文件、Windows 系统队列输出、Linux CUPS request id 或真人同学记录；证据索引不为它们设置空文件。
