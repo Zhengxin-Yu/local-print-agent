@@ -24,3 +24,5 @@ Task 14: fix round 2/5 (4 addressed, 0 Critical/Important open; commits 9d2bb29.
 Task 14: complete (commits eba577e..731a938, review clean for automated/current-environment scope; classmate acceptance and Windows/Linux platform recordings remain external manual evidence)
 Task 15: fix round 1/5 (4 findings addressed, 0 open; commits 4bd8f91..13c8f58)
 Task 15: complete (commits 731a938..13c8f58, review clean; external manual evidence remains explicitly incomplete)
+Final review fix wave: commits 13c8f58..41b25dd; four behavioral findings addressed and no new Critical/Important breakage.
+Final review parked: the path detector enumerates common POSIX/macOS roots rather than recognizing every hypothetical root name. Ruling: this is non-load-bearing future test hardening; a fresh scan found no absolute or repository-escaping local file path in the submitted Markdown, and all current path-like exceptions are URLs or API routes.
