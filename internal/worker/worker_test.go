@@ -24,7 +24,7 @@ type recordingStore struct {
 }
 
 func newRecordingStore(values ...*jobs.Job) *recordingStore {
-	store := &recordingStore{jobs: make(map[string]*jobs.Job), updates: make(chan jobs.Job, 32)}
+	store := &recordingStore{jobs: make(map[string]*jobs.Job), updates: make(chan jobs.Job, 256)}
 	for _, job := range values {
 		store.jobs[job.ID] = copyJob(job)
 	}
@@ -351,6 +351,65 @@ func TestWorkerReturnsWhenQueueCloses(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("Worker.Run() did not return after queue closure")
+	}
+}
+
+func TestWorkerClosesErrorsWhenRunFinishes(t *testing.T) {
+	queue := make(chan string)
+	close(queue)
+	w := worker.New(newRecordingStore(), rendererFunc(func(context.Context, *jobs.Job) (string, error) { return "", nil }), printer.NewFake(nil), queue)
+	w.Run(context.Background())
+
+	select {
+	case _, open := <-w.Errors():
+		if open {
+			t.Fatal("Errors() remains open after Worker.Done")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Errors() did not close after Worker.Run returned")
+	}
+}
+
+func TestWorkerProcessesTwentyJobsFIFOWithoutOverlap(t *testing.T) {
+	const count = 20
+	values := make([]*jobs.Job, 0, count)
+	queue := make(chan string, count)
+	for index := 0; index < count; index++ {
+		id := fmt.Sprintf("job-%02d", index)
+		values = append(values, queuedJob(id))
+		queue <- id
+	}
+	close(queue)
+	state := newRecordingStore(values...)
+	var mu sync.Mutex
+	active, maximum := 0, 0
+	order := make([]string, 0, count)
+	renderer := rendererFunc(func(_ context.Context, job *jobs.Job) (string, error) {
+		mu.Lock()
+		active++
+		if active > maximum {
+			maximum = active
+		}
+		order = append(order, job.ID)
+		mu.Unlock()
+		time.Sleep(time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return temporaryPDF(t, job.ID), nil
+	})
+	w := worker.New(state, renderer, printer.NewFake(nil), queue)
+	w.Run(context.Background())
+	if maximum != 1 {
+		t.Fatalf("maximum concurrent renders = %d, want 1", maximum)
+	}
+	for index, id := range order {
+		if want := fmt.Sprintf("job-%02d", index); id != want {
+			t.Fatalf("render order[%d] = %q, want %q", index, id, want)
+		}
+	}
+	if len(order) != count {
+		t.Fatalf("rendered %d jobs, want %d", len(order), count)
 	}
 }
 

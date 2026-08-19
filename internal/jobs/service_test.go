@@ -94,7 +94,7 @@ func TestServiceCreateNormalizesAndQueuesNewJob(t *testing.T) {
 	if job.ID == "" || job.Status != StatusQueued || job.Attempts != 0 || job.CreatedAt.IsZero() || job.UpdatedAt.IsZero() {
 		t.Fatalf("new job = %#v, want initialized queued job", job)
 	}
-	if job.PrinterName != "front-desk" || string(job.Payload) != `{"language":"go","source_code":"func main() {}"}` {
+	if job.PrinterName != "front-desk" || string(job.Payload) != `{"language":"go","source_code":" func main() {} "}` {
 		t.Fatalf("Create() returned unnormalized job %#v", job)
 	}
 	select {
@@ -262,6 +262,27 @@ func TestSecondServiceReportsDeliveryFailureWithoutSending(t *testing.T) {
 	case delivered := <-queue:
 		t.Fatalf("second Service delivered %q despite ownership violation", delivered)
 	default:
+	}
+}
+
+func TestServiceCloseReleasesLowLevelQueueOwnership(t *testing.T) {
+	queue := NewQueue()
+	first := NewService(newMemoryJobStore(), queue)
+	first.Close()
+	second := NewService(newMemoryJobStore(), queue)
+	defer second.Close()
+
+	job, err := second.Create(context.Background(), validSourceRequest())
+	if err != nil {
+		t.Fatalf("second Create() after first Close() error = %v", err)
+	}
+	select {
+	case id := <-queue:
+		if id != job.ID {
+			t.Fatalf("queued ID = %q, want %q", id, job.ID)
+		}
+	default:
+		t.Fatal("released queue was not reusable by a new Service")
 	}
 }
 

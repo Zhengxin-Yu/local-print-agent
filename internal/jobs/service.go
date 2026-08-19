@@ -29,8 +29,8 @@ type IDGenerator func() (string, error)
 
 var queueRegistry = struct {
 	sync.Mutex
-	owners map[chan<- string]struct{}
-}{owners: make(map[chan<- string]struct{})}
+	owners map[chan<- string]*Service
+}{owners: make(map[chan<- string]*Service)}
 
 // Service is the sole queue sender. NewService is a low-level compatibility
 // constructor: queue must be non-nil with cap QueueCapacity, exactly one
@@ -43,6 +43,7 @@ type Service struct {
 	mu               sync.Mutex
 	deliveries       int
 	contractViolated bool
+	closed           bool
 }
 
 func NewService(store JobStore, queue chan<- string) *Service {
@@ -56,11 +57,34 @@ func NewServiceWithIDGenerator(store JobStore, queue chan<- string, generator ID
 	if generator == nil {
 		generator = cryptoID
 	}
+	service := &Service{store: store, queue: queue, idGenerator: generator}
 	queueRegistry.Lock()
-	_, alreadyOwned := queueRegistry.owners[queue]
-	queueRegistry.owners[queue] = struct{}{}
+	_, service.contractViolated = queueRegistry.owners[queue]
+	if !service.contractViolated {
+		queueRegistry.owners[queue] = service
+	}
 	queueRegistry.Unlock()
-	return &Service{store: store, queue: queue, idGenerator: generator, contractViolated: alreadyOwned}
+	return service
+}
+
+// Close releases the low-level queue ownership registration. It does not
+// close the caller-owned channel. NewPipeline closes this lifecycle
+// automatically when its Worker exits.
+func (s *Service) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	queueRegistry.Lock()
+	if queueRegistry.owners[s.queue] == s {
+		delete(queueRegistry.owners, s.queue)
+	}
+	queueRegistry.Unlock()
 }
 
 func (s *Service) Create(ctx context.Context, request CreateJobRequest) (*Job, error) {
@@ -73,6 +97,9 @@ func (s *Service) Create(ctx context.Context, request CreateJobRequest) (*Job, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, &JobError{Code: ErrorCodeQueueDeliveryFailed, Message: "print queue is unavailable"}
+	}
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -141,6 +168,9 @@ func (s *Service) Retry(ctx context.Context, id string) (*Job, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, &JobError{Code: ErrorCodeQueueDeliveryFailed, Message: "print queue is unavailable"}
+	}
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -176,6 +206,9 @@ func (s *Service) ResumeQueued(ctx context.Context) (int, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return 0, &JobError{Code: ErrorCodeQueueDeliveryFailed, Message: "print queue is unavailable"}
+	}
 	if s.store == nil {
 		return 0, &JobError{Code: ErrorCodeStore, Message: "job store is required"}
 	}

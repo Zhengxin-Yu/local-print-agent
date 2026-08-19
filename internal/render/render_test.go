@@ -10,6 +10,13 @@ import (
 	"local-print-agent/internal/jobs"
 )
 
+func TestExecuteTemplateContentsRejectsInvalidTemplate(t *testing.T) {
+	_, err := executeTemplateContents("invalid.html.tmpl", []byte(`{{if .Missing}}`), struct{}{})
+	if err == nil {
+		t.Fatal("executeTemplateContents() invalid syntax error = nil")
+	}
+}
+
 func TestRenderBalloonHTMLShowsRequiredTicketDetailsAndEscapesMetadata(t *testing.T) {
 	job := loadRenderJob(t, "balloon.json")
 	job.ID = "balloon-job-001"
@@ -28,7 +35,7 @@ func TestRenderBalloonHTMLShowsRequiredTicketDetailsAndEscapesMetadata(t *testin
 		t.Error("balloon HTML is missing the narrow-page print specification")
 	}
 
-	job.Payload = json.RawMessage(`{"team_name":"<script>alert(1)</script>","problem_id":"C","solved_at":"2026-08-19T09:30:00+08:00","contest_name":"<img src=x onerror=1>","team_id":"team001","room":"A101","balloon_color":"red"}`)
+	job.Payload = json.RawMessage(`{"team_name":"星辰队<script>alert(1)</script>","problem_id":"C","solved_at":"2026-08-19T09:30:00+08:00","contest_name":"<img src=x onerror=1>","team_id":"team001","room":"A101","balloon_color":"red"}`)
 	html, err = RenderBalloonHTML(job)
 	if err != nil {
 		t.Fatalf("RenderBalloonHTML() with HTML input error = %v", err)
@@ -39,8 +46,8 @@ func TestRenderBalloonHTMLShowsRequiredTicketDetailsAndEscapesMetadata(t *testin
 			t.Errorf("balloon HTML contains unescaped user content %q", forbidden)
 		}
 	}
-	if !strings.Contains(page, "&lt;script&gt;alert(1)&lt;/script&gt;") {
-		t.Error("balloon HTML did not display escaped team name")
+	if !strings.Contains(page, "星辰队&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Error("balloon HTML did not display the Chinese team name with escaped markup")
 	}
 }
 
@@ -76,7 +83,12 @@ func TestRenderSourceHTMLHighlightsSupportedLanguagesAndPreservesSourceAsText(t 
 }
 
 func TestRenderSourceHTMLUsesLineStructureForWrappedCode(t *testing.T) {
-	job := &jobs.Job{Type: jobs.JobTypeSource, Payload: json.RawMessage(`{"language":"go","source_code":"// 第一行\n// 第二行"}`)}
+	longLine := "\t" + strings.Repeat("超长标识符_", 2048) + "<end>"
+	payload, err := json.Marshal(jobs.SourceCodePayload{Language: "go", SourceCode: "// 第一行\n" + longLine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &jobs.Job{Type: jobs.JobTypeSource, Payload: payload}
 	html, err := RenderSourceHTML(job)
 	if err != nil {
 		t.Fatal(err)
@@ -88,10 +100,18 @@ func TestRenderSourceHTMLUsesLineStructureForWrappedCode(t *testing.T) {
 		`.chroma .line { display: flex; align-items: flex-start; }`,
 		`.chroma .ln { flex: none; color: #6a737d; padding-right: 1em; user-select: none; }`,
 		`.chroma .cl { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }`,
+		"超长标识符_",
+		"end",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("source HTML missing exact Chroma line contract %q", want)
 		}
+	}
+	if got := strings.Count(page, `<span class="line">`); got != 2 {
+		t.Fatalf("rendered line count = %d, want 2 even with one very long line", got)
+	}
+	if strings.Contains(page, "<end>") || !strings.Contains(page, "&lt;") || !strings.Contains(page, "&gt;") {
+		t.Fatal("very long source line was interpreted as HTML instead of escaped text")
 	}
 }
 

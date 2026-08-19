@@ -49,6 +49,10 @@ func executeTemplate(name string, data any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read template %q: %w", name, err)
 	}
+	return executeTemplateContents(name, contents, data)
+}
+
+func executeTemplateContents(name string, contents []byte, data any) ([]byte, error) {
 	parsed, err := template.New(name).Parse(string(contents))
 	if err != nil {
 		return nil, fmt.Errorf("parse template %q: %w", name, err)

@@ -83,7 +83,6 @@ func normalizeSourceCodePayload(raw json.RawMessage) (json.RawMessage, error) {
 	}
 
 	payload.Language = strings.TrimSpace(payload.Language)
-	payload.SourceCode = strings.TrimSpace(payload.SourceCode)
 	payload.ContestName = strings.TrimSpace(payload.ContestName)
 	payload.TeamID = strings.TrimSpace(payload.TeamID)
 	payload.TeamName = strings.TrimSpace(payload.TeamName)
@@ -91,6 +90,9 @@ func normalizeSourceCodePayload(raw json.RawMessage) (json.RawMessage, error) {
 	payload.ProblemID = strings.TrimSpace(payload.ProblemID)
 	if !isSupportedLanguage(payload.Language) {
 		return nil, fmt.Errorf("unsupported source language %q", payload.Language)
+	}
+	if strings.TrimSpace(payload.SourceCode) == "" {
+		return nil, errors.New("source_code must contain non-whitespace content")
 	}
 	if byteCount := len([]byte(payload.SourceCode)); byteCount < minSourceCodeBytes || byteCount > maxSourceCodeBytes {
 		return nil, fmt.Errorf("source_code must be between %d and %d UTF-8 bytes", minSourceCodeBytes, maxSourceCodeBytes)

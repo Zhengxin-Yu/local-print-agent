@@ -172,7 +172,13 @@ func TestWorkerRetriesTransientGetAndReportsNotFoundWithoutCallingDependencies(t
 		var received int
 		for {
 			select {
-			case <-w.Errors():
+			case _, open := <-w.Errors():
+				if !open {
+					if received != 2 {
+						t.Fatalf("transient Get errors=%d, want 2", received)
+					}
+					return
+				}
 				received++
 			default:
 				if received != 2 {

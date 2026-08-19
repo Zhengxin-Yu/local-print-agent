@@ -210,7 +210,7 @@ func TestNormalizeCreateRequestReturnsDeepCopiedNormalizedRequest(t *testing.T) 
 	if normalized.PrinterName != "hallway  printer" {
 		t.Fatalf("PrinterName = %q, want internal spaces preserved", normalized.PrinterName)
 	}
-	if got, want := string(normalized.Payload), `{"language":"go","source_code":"alpha  \u2028beta\u2029gamma"}`; got != want {
+	if got, want := string(normalized.Payload), `{"language":"go","source_code":"  alpha  \u2028beta\u2029gamma  "}`; got != want {
 		t.Fatalf("Payload = %q, want %q", got, want)
 	}
 	if got := string(req.Payload); got != before {
@@ -221,6 +221,27 @@ func TestNormalizeCreateRequestReturnsDeepCopiedNormalizedRequest(t *testing.T) 
 	}
 	if &normalized.Payload[0] == &req.Payload[0] {
 		t.Fatal("normalized Payload aliases input Payload")
+	}
+}
+
+// This catches normalization that treats source code as metadata and strips
+// indentation or the final newline before the renderer sees it.
+func TestNormalizeCreateRequestPreservesSourceWhitespaceAndTabs(t *testing.T) {
+	source := "\tpackage main\n\nfunc main() {\n\tprintln(\"<中文>\")\n}\n"
+	normalized, err := NormalizeCreateRequest(CreateJobRequest{
+		Type:        JobTypeSource,
+		PrinterName: "front-desk",
+		Payload:     json.RawMessage(`{"language":"go","source_code":"\tpackage main\n\nfunc main() {\n\tprintln(\"<中文>\")\n}\n"}`),
+	})
+	if err != nil {
+		t.Fatalf("NormalizeCreateRequest() error = %v", err)
+	}
+	var payload SourceCodePayload
+	if err := json.Unmarshal(normalized.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SourceCode != source {
+		t.Fatalf("SourceCode = %q, want whitespace-preserving %q", payload.SourceCode, source)
 	}
 }
 

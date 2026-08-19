@@ -13,7 +13,10 @@ import (
 	"local-print-agent/internal/store"
 )
 
-const retryDelay = time.Millisecond
+const (
+	initialRetryDelay = 5 * time.Millisecond
+	maximumRetryDelay = 250 * time.Millisecond
+)
 
 type Store interface {
 	Get(context.Context, string) (*jobs.Job, error)
@@ -22,24 +25,29 @@ type Store interface {
 
 // Worker processes one ID through all durable updates before receiving another.
 type Worker struct {
-	store    Store
-	renderer render.Renderer
-	printer  printer.Adapter
-	queue    <-chan string
-	errors   chan error
-	done     chan struct{}
-	runOnce  sync.Once
+	store     Store
+	renderer  render.Renderer
+	printer   printer.Adapter
+	queue     <-chan string
+	errors    chan error
+	done      chan struct{}
+	runOnce   sync.Once
+	waitRetry func(context.Context, time.Duration) bool
+	onDone    func()
 }
 
 func New(store Store, renderer render.Renderer, printerAdapter printer.Adapter, queue <-chan string) *Worker {
-	return &Worker{store: store, renderer: renderer, printer: printerAdapter, queue: queue, errors: make(chan error, 32), done: make(chan struct{})}
+	return &Worker{store: store, renderer: renderer, printer: printerAdapter, queue: queue, errors: make(chan error, 32), done: make(chan struct{}), waitRetry: waitForRetry}
 }
 
 // NewPipeline is the production assembly entry point. Its queue is private:
 // callers receive no endpoint that can send to or close it.
 func NewPipeline(store jobs.JobStore, renderer render.Renderer, printerAdapter printer.Adapter) (*jobs.Service, *Worker) {
 	queue := jobs.NewQueue()
-	return jobs.NewService(store, queue), New(store, renderer, printerAdapter, queue)
+	service := jobs.NewService(store, queue)
+	jobWorker := New(store, renderer, printerAdapter, queue)
+	jobWorker.onDone = service.Close
+	return service, jobWorker
 }
 
 // Errors exposes a bounded, non-blocking observation stream for storage and
@@ -64,7 +72,13 @@ func (w *Worker) Run(ctx context.Context) {
 		return
 	}
 	w.runOnce.Do(func() {
-		defer close(w.done)
+		defer func() {
+			if w.onDone != nil {
+				w.onDone()
+			}
+			close(w.errors)
+			close(w.done)
+		}()
 		w.run(ctx)
 	})
 }
@@ -157,6 +171,7 @@ func (w *Worker) process(ctx context.Context, id string) {
 }
 
 func (w *Worker) get(ctx context.Context, id string) *jobs.Job {
+	attempt := 0
 	for {
 		job, err := w.store.Get(ctx, id)
 		if err == nil {
@@ -166,22 +181,25 @@ func (w *Worker) get(ctx context.Context, id string) *jobs.Job {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
-		if !retryWait(ctx) {
+		if !w.waitRetry(ctx, retryDelayForAttempt(attempt)) {
 			return nil
 		}
+		attempt++
 	}
 }
 
 func (w *Worker) persist(ctx context.Context, job *jobs.Job) bool {
+	attempt := 0
 	for {
 		if err := w.store.Update(ctx, job); err == nil {
 			return true
 		} else {
 			w.publish(err)
 		}
-		if !retryWait(ctx) {
+		if !w.waitRetry(ctx, retryDelayForAttempt(attempt)) {
 			return false
 		}
+		attempt++
 	}
 }
 
@@ -207,8 +225,19 @@ func (w *Worker) publish(err error) {
 	}
 }
 
-func retryWait(ctx context.Context) bool {
-	timer := time.NewTimer(retryDelay)
+func retryDelayForAttempt(attempt int) time.Duration {
+	delay := initialRetryDelay
+	for index := 0; index < attempt && delay < maximumRetryDelay; index++ {
+		delay *= 2
+		if delay > maximumRetryDelay {
+			delay = maximumRetryDelay
+		}
+	}
+	return delay
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

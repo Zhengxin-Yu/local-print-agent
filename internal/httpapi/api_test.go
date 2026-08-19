@@ -11,13 +11,172 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"local-print-agent/internal/jobs"
 	"local-print-agent/internal/printer"
 	"local-print-agent/internal/store"
+	"local-print-agent/internal/worker"
 )
+
+type recordingPersistentStore struct {
+	inner *store.JSONStore
+	mu    sync.Mutex
+	order []string
+}
+
+func (s *recordingPersistentStore) Create(ctx context.Context, job *jobs.Job) error {
+	if err := s.inner.Create(ctx, job); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.order = append(s.order, job.ID)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *recordingPersistentStore) Update(ctx context.Context, job *jobs.Job) error {
+	return s.inner.Update(ctx, job)
+}
+
+func (s *recordingPersistentStore) Get(ctx context.Context, id string) (*jobs.Job, error) {
+	return s.inner.Get(ctx, id)
+}
+
+func (s *recordingPersistentStore) List(ctx context.Context) ([]*jobs.Job, error) {
+	return s.inner.List(ctx)
+}
+
+func (s *recordingPersistentStore) CreateOrder() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.order...)
+}
+
+type apiRendererFunc func(context.Context, *jobs.Job) (string, error)
+
+func (fn apiRendererFunc) Render(ctx context.Context, job *jobs.Job) (string, error) {
+	return fn(ctx, job)
+}
+
+func TestAPIConcurrentCreatePersistsTwentyUniqueJobs(t *testing.T) {
+	jobStore, err := store.NewJSONStore(filepath.Join(t.TempDir(), "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordedStore := &recordingPersistentStore{inner: jobStore}
+	queue := jobs.NewQueue()
+	service := jobs.NewService(recordedStore, queue)
+	defer service.Close()
+	handler := NewRouter(Dependencies{Jobs: service})
+
+	const count = 20
+	ids := make(chan string, count)
+	errs := make(chan error, count)
+	var group sync.WaitGroup
+	for index := 0; index < count; index++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			response := serveAPI(handler, http.MethodPost, jobsPath, validCreateBody(), "application/json")
+			if response.Code != http.StatusAccepted {
+				errs <- fmt.Errorf("status %d: %s", response.Code, response.Body.String())
+				return
+			}
+			var envelope struct {
+				Data jobs.Job `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				errs <- err
+				return
+			}
+			ids <- envelope.Data.ID
+		}()
+	}
+	group.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := make(map[string]struct{}, count)
+	for id := range ids {
+		if len(id) != 32 {
+			t.Fatalf("generated ID %q length = %d, want 32", id, len(id))
+		}
+		if _, duplicate := seen[id]; duplicate {
+			t.Fatalf("duplicate concurrent job ID %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	persisted, err := jobStore.List(context.Background())
+	if err != nil || len(persisted) != count || len(seen) != count {
+		t.Fatalf("persisted=%d unique=%d error=%v, want %d", len(persisted), len(seen), err, count)
+	}
+
+	printerAdapter := printer.NewFake(nil)
+	active, maximum := 0, 0
+	jobWorker := worker.New(recordedStore, apiRendererFunc(func(_ context.Context, job *jobs.Job) (string, error) {
+		active++
+		if active > maximum {
+			maximum = active
+		}
+		time.Sleep(time.Millisecond)
+		active--
+		return job.ID + ".pdf", nil
+	}), printerAdapter, queue)
+	ctx, cancel := context.WithCancel(context.Background())
+	go jobWorker.Run(ctx)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(printerAdapter.Calls()) != count && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-jobWorker.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Worker did not stop after concurrent integration run")
+	}
+	calls := printerAdapter.Calls()
+	wantOrder := recordedStore.CreateOrder()
+	if len(calls) != count || len(wantOrder) != count {
+		t.Fatalf("print calls=%d create order=%d, want %d", len(calls), len(wantOrder), count)
+	}
+	if maximum != 1 {
+		t.Fatalf("maximum concurrent renders = %d, want 1", maximum)
+	}
+	for index, call := range calls {
+		if wantPDF := wantOrder[index] + ".pdf"; call.PDFPath != wantPDF {
+			t.Fatalf("print order[%d] PDF = %q, want %q from durable create order", index, call.PDFPath, wantPDF)
+		}
+	}
+}
+
+func TestAPICreateReportsQueueFullWithoutPersistingOverflow(t *testing.T) {
+	jobStore, err := store.NewJSONStore(filepath.Join(t.TempDir(), "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := jobs.NewService(jobStore, jobs.NewQueue())
+	defer service.Close()
+	handler := NewRouter(Dependencies{Jobs: service})
+	for index := 0; index < jobs.QueueCapacity; index++ {
+		response := serveAPI(handler, http.MethodPost, jobsPath, validCreateBody(), "application/json")
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("fill request %d status = %d: %s", index, response.Code, response.Body.String())
+		}
+	}
+	overflow := serveAPI(handler, http.MethodPost, jobsPath, validCreateBody(), "application/json")
+	assertEnvelope(t, overflow, http.StatusServiceUnavailable, string(jobs.ErrorCodeQueueFull))
+	persisted, err := jobStore.List(context.Background())
+	if err != nil || len(persisted) != jobs.QueueCapacity {
+		t.Fatalf("persisted jobs after overflow = %d, %v; want %d", len(persisted), err, jobs.QueueCapacity)
+	}
+}
 
 func TestHealthReturnsServiceStatusJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

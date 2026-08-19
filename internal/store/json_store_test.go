@@ -198,6 +198,47 @@ func TestJSONStoreRecoversOnlyInterruptedJobs(t *testing.T) {
 	}
 }
 
+func TestJSONStoreRestartRecoveryIsDurableAndDoesNotRequeueInterruptedWork(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	initial, err := NewJSONStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Date(2026, 8, 19, 4, 0, 0, 0, time.UTC)
+	for _, status := range []jobs.Status{jobs.StatusQueued, jobs.StatusRendering, jobs.StatusPrinting} {
+		job := testJob(string(status), status, createdAt)
+		if err := initial.Create(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	restarted, err := NewJSONStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.RecoverInterrupted(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewJSONStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"rendering", "printing"} {
+		job, err := reopened.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status != jobs.StatusFailed || job.Error == nil || job.Error.Code != jobs.ErrorCode("SERVICE_RESTARTED") || job.FinishedAt == nil {
+			t.Fatalf("recovered %q = %#v, want durable SERVICE_RESTARTED failure", id, job)
+		}
+	}
+	queued, err := reopened.Get(ctx, "queued")
+	if err != nil || queued.Status != jobs.StatusQueued {
+		t.Fatalf("queued restart job = %#v, %v; want still queued", queued, err)
+	}
+}
+
 func TestJSONStoreListHasDeterministicCreatedAtThenIDOrder(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewJSONStore(filepath.Join(t.TempDir(), "jobs.json"))
