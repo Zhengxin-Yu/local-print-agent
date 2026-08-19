@@ -22,3 +22,17 @@ func TestDefaultReadsConfiguredSumatraPDFPath(t *testing.T) {
 		t.Fatalf("Default().SumatraPDFPath = %q, want %q", got, want)
 	}
 }
+
+func TestDefaultUsesSafeDemoPrinterMode(t *testing.T) {
+	t.Setenv("LOCAL_PRINT_AGENT_PRINTER_MODE", "")
+	if got := Default().PrinterMode; got != PrinterModeDemo {
+		t.Fatalf("Default().PrinterMode = %q, want %q", got, PrinterModeDemo)
+	}
+}
+
+func TestDefaultReadsExplicitPlatformPrinterMode(t *testing.T) {
+	t.Setenv("LOCAL_PRINT_AGENT_PRINTER_MODE", "  PLATFORM  ")
+	if got := Default().PrinterMode; got != PrinterModePlatform {
+		t.Fatalf("Default().PrinterMode = %q, want %q", got, PrinterModePlatform)
+	}
+}

@@ -18,6 +18,7 @@ import (
 
 	"local-print-agent/internal/config"
 	"local-print-agent/internal/jobs"
+	"local-print-agent/internal/printer"
 	"local-print-agent/internal/render"
 )
 
@@ -128,6 +129,79 @@ func TestBuildApplicationProvidesAVisibleFakePrinter(t *testing.T) {
 	application.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Mock Printer（不执行实体打印）") {
 		t.Fatalf("printers = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestConfiguredPrinterDefaultsToNonPrintingDemoAdapter(t *testing.T) {
+	called := false
+	selected, err := configuredPrinter(config.Config{}, func(printer.PlatformConfig) (printer.Adapter, error) {
+		called = true
+		return nil, errors.New("platform factory must not be called")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("default demo mode called the platform adapter factory")
+	}
+	listed, err := selected.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != fakePrinterName {
+		t.Fatalf("demo printers = %#v, want the visibly non-printing adapter", listed)
+	}
+}
+
+func TestConfiguredPrinterUsesPlatformAdapterOnlyWhenExplicit(t *testing.T) {
+	want := printer.NewFake([]printer.Info{{Name: "Controlled OS Queue", IsDefault: true}})
+	var received printer.PlatformConfig
+	selected, err := configuredPrinter(config.Config{
+		DataDir:        "controlled-data",
+		SumatraPDFPath: "controlled-sumatra",
+		PrinterMode:    config.PrinterModePlatform,
+	}, func(cfg printer.PlatformConfig) (printer.Adapter, error) {
+		received = cfg
+		return want, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != want {
+		t.Fatalf("configuredPrinter() = %T, want injected platform adapter", selected)
+	}
+	if received.DataDir != "controlled-data" || received.SumatraPDFPath != "controlled-sumatra" {
+		t.Fatalf("platform config = %#v", received)
+	}
+}
+
+func TestExplicitPlatformModeExposesPlatformAdapterPrintersAPI(t *testing.T) {
+	cfg := config.Config{DataDir: t.TempDir(), PrinterMode: config.PrinterModePlatform}
+	renderer, err := render.NewFake(filepath.Join(cfg.DataDir, "fake-pdfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	application, err := buildApplicationWithRendererAndPrinterFactory(cfg, renderer, func(printer.PlatformConfig) (printer.Adapter, error) {
+		return printer.NewFake([]printer.Info{{Name: "Platform Queue", IsDefault: true}}), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/printers", nil)
+	response := httptest.NewRecorder()
+	application.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Platform Queue") || strings.Contains(response.Body.String(), fakePrinterName) {
+		t.Fatalf("printers = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestConfiguredPrinterRejectsUnknownMode(t *testing.T) {
+	_, err := configuredPrinter(config.Config{PrinterMode: "automatic"}, func(printer.PlatformConfig) (printer.Adapter, error) {
+		t.Fatal("unknown mode called platform factory")
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "printer mode") {
+		t.Fatalf("configuredPrinter() error = %v, want printer mode error", err)
 	}
 }
 

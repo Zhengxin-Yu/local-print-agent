@@ -34,6 +34,8 @@ type runningServer struct {
 	Done <-chan error
 }
 
+type platformPrinterFactory func(printer.PlatformConfig) (printer.Adapter, error)
+
 func buildApplication(cfg config.Config) (*application, error) {
 	if cfg.DataDir == "" {
 		return nil, errors.New("data directory is required")
@@ -49,6 +51,10 @@ func buildApplication(cfg config.Config) (*application, error) {
 }
 
 func buildApplicationWithRenderer(cfg config.Config, renderer render.Renderer) (*application, error) {
+	return buildApplicationWithRendererAndPrinterFactory(cfg, renderer, printer.NewPlatformAdapter)
+}
+
+func buildApplicationWithRendererAndPrinterFactory(cfg config.Config, renderer render.Renderer, platformFactory platformPrinterFactory) (*application, error) {
 	if cfg.DataDir == "" {
 		return nil, errors.New("data directory is required")
 	}
@@ -58,6 +64,10 @@ func buildApplicationWithRenderer(cfg config.Config, renderer render.Renderer) (
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
+	printers, err := configuredPrinter(cfg, platformFactory)
+	if err != nil {
+		return nil, err
+	}
 	jobStore, err := store.NewJSONStore(filepath.Join(cfg.DataDir, "jobs.json"))
 	if err != nil {
 		return nil, err
@@ -65,12 +75,35 @@ func buildApplicationWithRenderer(cfg config.Config, renderer render.Renderer) (
 	if err := jobStore.RecoverInterrupted(context.Background()); err != nil {
 		return nil, fmt.Errorf("recover interrupted jobs: %w", err)
 	}
-	printers := printer.NewFake([]printer.Info{{Name: fakePrinterName, IsDefault: true}})
 	service, jobWorker := worker.NewPipeline(jobStore, renderer, printers)
 	if _, err := service.ResumeQueued(context.Background()); err != nil {
 		return nil, fmt.Errorf("restore queued jobs: %w", err)
 	}
 	return &application{Handler: httpapi.NewRouter(httpapi.Dependencies{Jobs: service, Printers: printers, Web: web.Assets, PreviewRoot: filepath.Join(cfg.DataDir, "jobs")}), worker: jobWorker}, nil
+}
+
+func configuredPrinter(cfg config.Config, platformFactory platformPrinterFactory) (printer.Adapter, error) {
+	switch cfg.PrinterMode {
+	case "", config.PrinterModeDemo:
+		return printer.NewFake([]printer.Info{{Name: fakePrinterName, IsDefault: true}}), nil
+	case config.PrinterModePlatform:
+		if platformFactory == nil {
+			return nil, errors.New("platform printer adapter factory is required")
+		}
+		adapter, err := platformFactory(printer.PlatformConfig{
+			DataDir:        cfg.DataDir,
+			SumatraPDFPath: cfg.SumatraPDFPath,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if adapter == nil {
+			return nil, errors.New("platform printer adapter is required")
+		}
+		return adapter, nil
+	default:
+		return nil, fmt.Errorf("unsupported printer mode %q: use demo or platform", cfg.PrinterMode)
+	}
 }
 
 func start(ctx context.Context, cfg config.Config) (*runningServer, error) {
