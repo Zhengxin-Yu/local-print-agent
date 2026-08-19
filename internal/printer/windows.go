@@ -33,31 +33,56 @@ type commandOutput struct {
 }
 
 type commandRunner func(context.Context, string, ...string) (commandOutput, error)
+type windowsPathUnsafeFunc func(string, os.FileInfo) (bool, error)
+type windowsIdentityReader func(string) (windowsExecutableIdentity, error)
 
 type windowsAdapter struct {
-	dataDir        string
-	sumatraPDFPath string
-	powerShellPath string
-	run            commandRunner
+	dataDir         string
+	sumatraPDFPath  string
+	sumatraIdentity windowsExecutableIdentity
+	powerShellPath  string
+	run             commandRunner
+	pathUnsafe      windowsPathUnsafeFunc
+	readIdentity    windowsIdentityReader
+}
+
+type windowsExecutableIdentity struct {
+	volumeSerialNumber uint32
+	fileIndexHigh      uint32
+	fileIndexLow       uint32
 }
 
 var _ Adapter = (*windowsAdapter)(nil)
 
 // NewPlatformAdapter constructs the Windows SumatraPDF printer boundary.
 func NewPlatformAdapter(cfg PlatformConfig) (Adapter, error) {
+	return newWindowsAdapter(cfg, windowsPathUnsafe, readWindowsExecutableIdentity)
+}
+
+func newWindowsAdapter(cfg PlatformConfig, pathUnsafe windowsPathUnsafeFunc, readIdentity windowsIdentityReader) (*windowsAdapter, error) {
 	dataDir, err := filepath.Abs(strings.TrimSpace(cfg.DataDir))
 	if err != nil || strings.TrimSpace(cfg.DataDir) == "" {
 		return nil, printCommandError("printer data directory is unavailable", err)
 	}
-	sumatraPDFPath, err := validateWindowsExecutable(cfg.SumatraPDFPath)
+	if pathUnsafe == nil || readIdentity == nil {
+		return nil, printCommandError("SumatraPDF is unavailable", errors.New("Windows executable validation is unavailable"))
+	}
+	sumatraPDFPath, err := validateWindowsExecutable(cfg.SumatraPDFPath, pathUnsafe)
+	if err != nil {
+		return nil, printCommandError("SumatraPDF is unavailable", err)
+	}
+	sumatraIdentity, err := readIdentity(sumatraPDFPath)
 	if err != nil {
 		return nil, printCommandError("SumatraPDF is unavailable", err)
 	}
 	return &windowsAdapter{
-		dataDir:        dataDir,
-		sumatraPDFPath: sumatraPDFPath,
-		powerShellPath: "powershell.exe",
-		run:            runWindowsCommand,
+		dataDir:         dataDir,
+		sumatraPDFPath:  sumatraPDFPath,
+		sumatraIdentity: sumatraIdentity,
+		powerShellPath:  "powershell.exe",
+		run:             runWindowsCommand,
+		pathUnsafe:      pathUnsafe,
+		readIdentity:    readIdentity,
 	}, nil
 }
 
@@ -102,6 +127,14 @@ func (a *windowsAdapter) Print(ctx context.Context, printerName, pdfPath string)
 	validatedPDF, err = validateWindowsPrintPDF(a.dataDir, validatedPDF)
 	if err != nil {
 		return printCommandError("print file is invalid", err)
+	}
+	validatedSumatra, err := validateWindowsExecutable(a.sumatraPDFPath, a.pathUnsafe)
+	if err != nil {
+		return printCommandError("SumatraPDF is unavailable", err)
+	}
+	currentIdentity, err := a.readIdentity(validatedSumatra)
+	if err != nil || currentIdentity != a.sumatraIdentity {
+		return printCommandError("SumatraPDF is unavailable", errors.New("SumatraPDF executable identity changed"))
 	}
 	output, err := a.runWithTimeout(ctx, a.sumatraPDFPath,
 		"-print-to", printerName, "-silent", validatedPDF)
@@ -184,26 +217,48 @@ func parseWindowsPrinters(output []byte) ([]Info, error) {
 	return printers, nil
 }
 
-func validateWindowsExecutable(path string) (string, error) {
+func validateWindowsExecutable(path string, pathUnsafe windowsPathUnsafeFunc) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("SumatraPDF path is required")
 	}
-	absolute, err := filepath.Abs(path)
+	absolute, err := filepath.Abs(strings.TrimSpace(path))
 	if err != nil {
+		return "", err
+	}
+	if err := validateNoWindowsReparseComponentsWith(absolute, pathUnsafe); err != nil {
 		return "", err
 	}
 	info, err := os.Lstat(absolute)
 	if err != nil {
 		return "", err
 	}
-	unsafe, err := windowsPathUnsafe(absolute, info)
-	if err != nil {
-		return "", err
-	}
-	if unsafe || !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() {
 		return "", errors.New("SumatraPDF path is not a regular file")
 	}
 	return absolute, nil
+}
+
+func readWindowsExecutableIdentity(path string) (windowsExecutableIdentity, error) {
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return windowsExecutableIdentity{}, err
+	}
+	handle, err := windows.CreateFile(pointer, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return windowsExecutableIdentity{}, err
+	}
+	defer windows.CloseHandle(handle)
+	var information windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
+		return windowsExecutableIdentity{}, err
+	}
+	return windowsExecutableIdentity{
+		volumeSerialNumber: information.VolumeSerialNumber,
+		fileIndexHigh:      information.FileIndexHigh,
+		fileIndexLow:       information.FileIndexLow,
+	}, nil
 }
 
 func validateWindowsPrintPDF(dataDir, pdfPath string) (string, error) {
@@ -254,6 +309,13 @@ func validateWindowsPrintPDF(dataDir, pdfPath string) (string, error) {
 }
 
 func validateNoWindowsReparseComponents(path string) error {
+	return validateNoWindowsReparseComponentsWith(path, windowsPathUnsafe)
+}
+
+func validateNoWindowsReparseComponentsWith(path string, pathUnsafe windowsPathUnsafeFunc) error {
+	if pathUnsafe == nil {
+		return errors.New("Windows path validation is unavailable")
+	}
 	absolute, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return err
@@ -272,7 +334,7 @@ func validateNoWindowsReparseComponents(path string) error {
 		if err != nil {
 			return err
 		}
-		unsafe, err := windowsPathUnsafe(component, info)
+		unsafe, err := pathUnsafe(component, info)
 		if err != nil {
 			return err
 		}

@@ -207,12 +207,127 @@ func TestWindowsAdapterRevalidatesPreviewAfterEnumeration(t *testing.T) {
 	}
 }
 
+func TestWindowsAdapterRejectsSumatraReplacedDuringEnumeration(t *testing.T) {
+	adapter, pdfPath, sumatraPath := testWindowsAdapter(t)
+	replacementPath := filepath.Join(filepath.Dir(sumatraPath), "replacement.exe")
+	if err := os.WriteFile(replacementPath, []byte("replacement controlled executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var replacementErr error
+	runner := &recordingCommandRunner{
+		responses: []runnerResponse{{stdout: `{"Name":"Office","Default":true}`}},
+		afterRun: func(index int) {
+			if index != 0 {
+				return
+			}
+			if err := os.Remove(sumatraPath); err != nil {
+				replacementErr = err
+				return
+			}
+			replacementErr = os.Rename(replacementPath, sumatraPath)
+		},
+	}
+	adapter.run = runner.run
+
+	err := adapter.Print(context.Background(), "Office", pdfPath)
+	if replacementErr != nil {
+		t.Fatal(replacementErr)
+	}
+	assertJobErrorCode(t, err, jobs.ErrorCodePrintFailed)
+	if strings.Contains(err.Error(), sumatraPath) {
+		t.Fatalf("public error leaked SumatraPDF path: %q", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %#v, want enumeration only after executable replacement", runner.commands)
+	}
+}
+
 func TestNewPlatformAdapterRejectsMissingSumatraWithoutLeakingPath(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "private", "SumatraPDF.exe")
 	_, err := NewPlatformAdapter(PlatformConfig{DataDir: t.TempDir(), SumatraPDFPath: missing})
 	assertJobErrorCode(t, err, jobs.ErrorCodePrintFailed)
 	if strings.Contains(err.Error(), missing) {
 		t.Fatalf("public error leaked SumatraPDF path: %q", err)
+	}
+}
+
+func TestNewWindowsAdapterRejectsInjectedParentReparse(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "tools")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sumatraPath := filepath.Join(binDir, "SumatraPDF.exe")
+	if err := os.WriteFile(sumatraPath, []byte("controlled executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantUnsafe := filepath.Clean(binDir)
+	created, err := newWindowsAdapter(
+		PlatformConfig{DataDir: filepath.Join(root, "data"), SumatraPDFPath: sumatraPath},
+		func(path string, _ os.FileInfo) (bool, error) {
+			return filepath.Clean(path) == wantUnsafe, nil
+		},
+		func(string) (windowsExecutableIdentity, error) {
+			return windowsExecutableIdentity{volumeSerialNumber: 1, fileIndexLow: 2}, nil
+		},
+	)
+	if created != nil {
+		t.Fatalf("newWindowsAdapter() = %#v, want rejection", created)
+	}
+	assertJobErrorCode(t, err, jobs.ErrorCodePrintFailed)
+	if strings.Contains(err.Error(), sumatraPath) || strings.Contains(err.Error(), binDir) {
+		t.Fatalf("public error leaked reparse path: %q", err)
+	}
+}
+
+func TestWindowsAdapterRechecksInjectedParentReparseAfterEnumeration(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "tools")
+	jobDir := filepath.Join(root, "data", "jobs", "0123456789abcdef0123456789abcdef")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(jobDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sumatraPath := filepath.Join(binDir, "SumatraPDF.exe")
+	pdfPath := filepath.Join(jobDir, "preview.pdf")
+	if err := os.WriteFile(sumatraPath, []byte("controlled executable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parentBecameUnsafe := false
+	adapter, err := newWindowsAdapter(
+		PlatformConfig{DataDir: filepath.Join(root, "data"), SumatraPDFPath: sumatraPath},
+		func(path string, _ os.FileInfo) (bool, error) {
+			return parentBecameUnsafe && filepath.Clean(path) == filepath.Clean(binDir), nil
+		},
+		func(string) (windowsExecutableIdentity, error) {
+			return windowsExecutableIdentity{volumeSerialNumber: 1, fileIndexLow: 2}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingCommandRunner{
+		responses: []runnerResponse{{stdout: `{"Name":"Office","Default":true}`}},
+		afterRun: func(index int) {
+			if index == 0 {
+				parentBecameUnsafe = true
+			}
+		},
+	}
+	adapter.run = runner.run
+
+	err = adapter.Print(context.Background(), "Office", pdfPath)
+	assertJobErrorCode(t, err, jobs.ErrorCodePrintFailed)
+	if strings.Contains(err.Error(), sumatraPath) || strings.Contains(err.Error(), binDir) {
+		t.Fatalf("public error leaked reparse path: %q", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %#v, want enumeration only after parent became reparse", runner.commands)
 	}
 }
 

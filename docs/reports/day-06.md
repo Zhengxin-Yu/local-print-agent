@@ -15,6 +15,7 @@
 - 枚举：固定 PowerShell `Get-CimInstance Win32_Printer | Select-Object Name,Default | ConvertTo-Json`，兼容单对象与数组。
 - 提交：`SumatraPDF.exe -print-to <枚举名称> -silent <任务目录/preview.pdf>`，参数数组顺序由测试精确断言。
 - 配置：`LOCAL_PRINT_AGENT_SUMATRA_PATH` 指定 SumatraPDF 普通文件。
+- 可执行文件固定：构造时逐级拒绝 SumatraPDF 路径中的 reparse point，并记录卷序列号与文件索引；枚举后再次检查路径并比较同一文件身份，防止父 junction 重定向或叶文件替换。
 - 超时：每次外部命令 30 秒。
 - 打印机：请求名称必须精确匹配枚举结果，否则 `PRINTER_NOT_FOUND`。
 - PDF：仅接受 `DataDir/jobs/<32位小写十六进制ID>/preview.pdf`，逐级拒绝链接和 Windows reparse point。
