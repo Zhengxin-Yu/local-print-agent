@@ -14,14 +14,21 @@ import (
 )
 
 type sourceTemplateData struct {
-	JobID           string
-	ContestName     string
-	TeamID          string
-	TeamName        string
-	Room            string
-	ProblemID       string
-	HighlightedCode template.HTML
+	JobID              string
+	MinimumChromeMajor int
+	ContestName        string
+	TeamID             string
+	TeamName           string
+	Room               string
+	ProblemID          string
+	HighlightedCode    template.HTML
 }
+
+// MinimumChromeMajor is the first Chromium major version that supports the
+// @page margin boxes used for reliable source-listing page numbers.
+// Future browser renderers must reject older versions with
+// RENDERER_VERSION_UNSUPPORTED rather than silently omit page numbers.
+const MinimumChromeMajor = 131
 
 // RenderSourceHTML renders supported source code with Chroma-controlled HTML.
 // The highlighted fragment is the only value intentionally marked as safe.
@@ -41,7 +48,7 @@ func RenderSourceHTML(job *jobs.Job) ([]byte, error) {
 		return nil, err
 	}
 	return executeTemplate("source_code.html.tmpl", sourceTemplateData{
-		JobID: job.ID, ContestName: displayOrPlaceholder(payload.ContestName), TeamID: displayOrPlaceholder(payload.TeamID),
+		JobID: job.ID, MinimumChromeMajor: MinimumChromeMajor, ContestName: displayOrPlaceholder(payload.ContestName), TeamID: displayOrPlaceholder(payload.TeamID),
 		TeamName: displayOrPlaceholder(payload.TeamName), Room: displayOrPlaceholder(payload.Room), ProblemID: displayOrPlaceholder(payload.ProblemID),
 		HighlightedCode: template.HTML(highlighted), // Chroma's formatter escapes source text before this trusted insertion.
 	})

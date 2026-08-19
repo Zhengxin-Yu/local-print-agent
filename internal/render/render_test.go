@@ -95,12 +95,55 @@ func TestRenderSourceHTMLUsesLineStructureForWrappedCode(t *testing.T) {
 	}
 }
 
+func TestSourceRenderDeclaresMinimumChromeVersion(t *testing.T) {
+	if MinimumChromeMajor != 131 {
+		t.Fatalf("MinimumChromeMajor = %d, want 131", MinimumChromeMajor)
+	}
+	page, err := RenderSourceHTML(&jobs.Job{Type: jobs.JobTypeSource, Payload: json.RawMessage(`{"language":"go","source_code":"func main() {}"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `<meta name="local-print-agent-minimum-chrome-major" content="131">`; !strings.Contains(string(page), want) {
+		t.Fatalf("source HTML does not declare Chrome margin-box requirement %q", want)
+	}
+}
+
+func TestRenderSourceHTMLEscapesLongMetadataWithoutChangingHeaderHeightContract(t *testing.T) {
+	longMetadata := "BEGIN-<script>alert(1)</script>-END-" + strings.Repeat("超长元数据", 1000)
+	payload, err := json.Marshal(jobs.SourceCodePayload{
+		Language:    "go",
+		SourceCode:  "func main() {}",
+		ContestName: longMetadata,
+		TeamID:      longMetadata,
+		TeamName:    longMetadata,
+		Room:        longMetadata,
+		ProblemID:   longMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := RenderSourceHTML(&jobs.Job{ID: longMetadata, Type: jobs.JobTypeSource, Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := string(page)
+	if strings.Contains(rendered, "<script>") {
+		t.Fatal("source HTML contains raw script markup from long metadata")
+	}
+	if got := strings.Count(rendered, "BEGIN-&lt;script&gt;alert(1)&lt;/script&gt;-END-"); got != 7 {
+		t.Fatalf("escaped long metadata occurrences = %d, want 7", got)
+	}
+	assertSourcePrintContract(t, rendered)
+}
+
 func assertSourcePrintContract(t *testing.T, page string) {
 	t.Helper()
+	page = strings.ReplaceAll(page, "\r\n", "\n")
 	for _, want := range []string{
-		"@page {\n  size: A4;\n  margin: 22mm 13mm 18mm;\n  @bottom-center {\n    content: \"第 \" counter(page) \" / \" counter(pages) \" 页\";\n    font-family: \"Microsoft YaHei\", sans-serif;\n    font-size: 8pt;\n  }\n}",
-		".page-header { position: fixed; top: 0; left: 0; right: 0; min-height: 12mm; border-bottom: 1px solid #777; padding-bottom: 2mm; font-family: \"Microsoft YaHei\", sans-serif; font-size: 9pt; }",
-		"main { padding-top: 14mm; }",
+		"@page {\n  size: A4;\n  margin: 24mm 13mm 18mm;\n  @bottom-center {\n    content: \"第 \" counter(page) \" / \" counter(pages) \" 页\";\n    font-family: \"Microsoft YaHei\", sans-serif;\n    font-size: 8pt;\n  }\n}",
+		".page-header { position: fixed; top: -20mm; left: 0; right: 0; height: 14mm; max-height: 14mm; overflow: hidden; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); column-gap: 2mm; border-bottom: 1px solid #777; font-family: \"Microsoft YaHei\", sans-serif; font-size: 9pt; }",
+		".page-header span { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("source HTML missing exact print contract %q", want)
@@ -108,6 +151,9 @@ func assertSourcePrintContract(t *testing.T, page string) {
 	}
 	if strings.Contains(page, "page-footer") || strings.Contains(page, `<footer`) {
 		t.Error("source HTML retains the obsolete fixed footer instead of a page margin box")
+	}
+	if strings.Contains(page, "main { padding-top:") {
+		t.Error("source HTML relies on a first-page main padding instead of the repeated @page top margin")
 	}
 }
 
