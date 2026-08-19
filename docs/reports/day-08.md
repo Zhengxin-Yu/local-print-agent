@@ -2,12 +2,12 @@
 
 ## 1. 最终回归摘要和自动测试输出
 
-验证日期：2026-08-19；主机：Windows amd64；Go：`go1.25.4 windows/amd64`；module 指定 `go 1.23.0`。本轮所有 Go 命令将 `GOCACHE` 显式指向已忽略的项目相对目录 `.cache/`，默认只使用 Fake Printer 或受控 command runner，没有向系统或实体打印队列提交任务。
+验证日期：2026-08-19；主机：Windows amd64；Go：`go1.25.4 windows/amd64`；module 指定 `go 1.23.0`。本轮所有 Go 命令从已忽略的项目相对目录 `.cache/` 解析出运行时所需绝对 `GOCACHE`，默认只使用 Fake Printer 或受控 command runner，没有向系统或实体打印队列提交任务。
 
 | 命令 | 结果 | 摘要 |
 | --- | --- | --- |
-| `go test ./... -count=1 -v` | 完成 | 133 个顶层测试通过，0 失败，6 跳过；10 个含测试包通过，`templates` 无测试文件。 |
-| `go test -race ./... -count=1` | 完成 | 10 个含测试包通过，0 race。 |
+| `go test ./... -count=1 -v` | 完成 | 141 个顶层测试完成：135 通过、0 失败、6 跳过；11 个含测试包通过，`templates` 无测试文件。 |
+| `go test -race ./... -count=1` | 完成 | 11 个含测试包通过，0 race；`templates` 无测试文件。 |
 | `go vet ./...` | 完成 | exit 0，无输出。 |
 | `go mod verify` | 完成 | `all modules verified`。 |
 | `git diff --check` | 完成 | exit 0；仅有 Git 的 LF→CRLF 工作区提示，不是 whitespace error。 |
@@ -60,8 +60,8 @@
 | 固定顺序 8 分钟演示脚本 | 完成 | `docs/demo-script.md`；8 段时间点从 00:00 连续至 08:00。 |
 | Windows/Linux 脚本显式 demo/platform | 完成 | `scripts/run-windows.ps1`、`scripts/run-linux.sh`；AST/`bash -n`、非法参数和依赖前置检查。 |
 | Linux 脚本 LF 交付 | 完成 | `.gitattributes` 固定 `*.sh text eol=lf`，避免 Windows 打包后 shebang 变为 `bash\r`。 |
-| 干净副本不带版本库/缓存/数据 | 完成 | 最终副本 `../local-print-agent-task14-clean-20260819-03`；复制器显式拒绝 `.git/.worktrees/.superpowers/.tmp/data`。该目录是本机临时验证物，不提交。 |
-| 只按 README 启动至 health/打印机/创建/预览 | 完成 | 服务监听 `http://127.0.0.1:17653`；`/health` 返回 `status=ok`、API `v1`；发现 Mock Printer；任务 `cb952a0b7ab5df015b599b3cbf3c6484` 最终为 `succeeded`；preview 返回 HTTP 200、`application/pdf`、36,972 bytes；停止后端口释放。全程未访问系统打印队列。 |
+| 干净副本不带版本库/缓存/数据 | 完成 | 启动前的当前工作树副本 `../local-print-agent-task14-clean-20260819-04` 有 82 个文件；复制器显式拒绝 `.git/.worktrees/.superpowers/.tmp/data/.cache`，README SHA-256 与当前工作树一致。demo 运行时按预期新建 `.cache/` 与 `data/`；该目录是本机临时验证物，不提交。 |
+| 只按当前 README 启动至 health/打印机/创建/预览 | 完成 | 严格执行不含 `-BrowserPath` 的 demo 主命令；服务自动发现浏览器并监听 `http://127.0.0.1:17653`；`/health` 返回 `service=local-print-agent`、`status=ok`、API `v1`；发现 Mock Printer；合法新建任务 `809b3c736979ffe2ac9466441f8c4fa2` 最终为 `succeeded`、`attempts=1`；preview 返回 HTTP 200、`application/pdf`、35,180 bytes；停止后进程退出且端口可重新绑定。全程未访问系统打印队列。 |
 | 真人同学只看 README 启动 | 未做 | 无真人参与；见第 3 节待执行清单。 |
 | Windows 系统队列录屏 | 未做 | 无 SumatraPDF/已确认自动保存虚拟队列；未向系统队列提交。 |
 | Linux/CUPS 录屏和 runtime 测试 | 未做 | 本机无 Linux runtime/CUPS；已有交叉编译不能替代。 |
@@ -85,20 +85,21 @@
 Windows demo：
 
 ```powershell
-.\scripts\run-windows.ps1 -Mode demo -BrowserPath '.\tools\chrome\chrome.exe' -GoCachePath '.cache\go-build'
+.\scripts\run-windows.ps1 -Mode demo -GoCachePath '.cache\go-build'
 ```
 
 Linux demo：
 
 ```bash
-./scripts/run-linux.sh --mode demo --browser-path ./tools/chrome/chrome --go-cache .cache/go-build
+./scripts/run-linux.sh --mode demo --go-cache .cache/go-build
 ```
 
 平台模式仅在安全队列确认后执行，完整参数见 README。回归：
 
 ```powershell
 $env:GOTOOLCHAIN = 'local'
-$env:GOCACHE = '.cache\go-test'
+$cacheDir = New-Item -ItemType Directory -Force '.cache\go-test'
+$env:GOCACHE = $cacheDir.FullName
 go test ./... -count=1 -v
 go test -race ./... -count=1
 go vet ./...

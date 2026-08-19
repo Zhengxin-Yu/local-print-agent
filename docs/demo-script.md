@@ -7,13 +7,13 @@ Linux 命令行示例需 curl 7.76+ 才支持 `--fail-with-body`；不具备时�
 预先启动（不计入 8 分钟）：
 
 ```powershell
-.\scripts\run-windows.ps1 -Mode demo -BrowserPath '.\tools\chrome\chrome.exe' -GoCachePath '.cache\go-build'
+.\scripts\run-windows.ps1 -Mode demo -GoCachePath '.cache\go-build'
 ```
 
 或：
 
 ```bash
-./scripts/run-linux.sh --mode demo --browser-path ./tools/chrome/chrome --go-cache .cache/go-build
+./scripts/run-linux.sh --mode demo --go-cache .cache/go-build
 ```
 
 记录终端输出的实际 URL，并令 `$base`/`$BASE` 指向它。准备一段至少 6 字节、含中文注释和缩进的 C++ 源码。
@@ -22,12 +22,14 @@ Linux 命令行示例需 curl 7.76+ 才支持 `--fail-with-body`；不具备时�
 
 ```powershell
 $env:GOTOOLCHAIN = 'local'
-$env:GOCACHE = '.cache\go-demo-test'
+$cacheDir = New-Item -ItemType Directory -Force '.cache\go-demo-test'
+$env:GOCACHE = $cacheDir.FullName
 ```
 
 ```bash
 export GOTOOLCHAIN=local
-export GOCACHE=.cache/go-demo-test
+mkdir -p .cache/go-demo-test
+export GOCACHE="$PWD/.cache/go-demo-test"
 ```
 
 ## 00:00–00:30 背景（30 秒）
@@ -133,7 +135,8 @@ go test ./internal/jobs -run '^TestServiceRetryOnlyFailedJobAndResetsLifecycle$'
 
 ```powershell
 $env:GOTOOLCHAIN = 'local'
-$env:GOCACHE = '.cache\go-demo-test'
+$cacheDir = New-Item -ItemType Directory -Force '.cache\go-demo-test'
+$env:GOCACHE = $cacheDir.FullName
 go test ./... -count=1
 go test -race ./... -count=1
 go vet ./...
@@ -143,7 +146,8 @@ if (Test-Path -LiteralPath '.git') { git diff --check }
 
 ```bash
 export GOTOOLCHAIN=local
-export GOCACHE=.cache/go-demo-test
+mkdir -p .cache/go-demo-test
+export GOCACHE="$PWD/.cache/go-demo-test"
 go test ./... -count=1
 go test -race ./... -count=1
 go vet ./...
