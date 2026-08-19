@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -109,6 +110,12 @@ func TestJSONStoreLoadsJobsAfterRestart(t *testing.T) {
 	if err := store.Create(ctx, created); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
+	updated := *created
+	updated.Status = jobs.StatusPrinting
+	updated.Payload = json.RawMessage(`{"ticket":"updated-after-create"}`)
+	if err := store.Update(ctx, &updated); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
 
 	restarted, err := NewJSONStore(path)
 	if err != nil {
@@ -118,7 +125,7 @@ func TestJSONStoreLoadsJobsAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() after restart error = %v", err)
 	}
-	if got.ID != "persists" || string(got.Payload) != `{"ticket":"persists"}` {
+	if got.ID != "persists" || got.Status != jobs.StatusPrinting || string(got.Payload) != `{"ticket":"updated-after-create"}` {
 		t.Fatalf("Get() after restart = %#v", got)
 	}
 }
@@ -310,6 +317,61 @@ func TestJSONStoreRemovesTemporaryFileWhenReplacementFails(t *testing.T) {
 	}
 	if _, err := store.Get(ctx, "unsaved"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("failed Create() changed in-memory state: %v", err)
+	}
+}
+
+func TestJSONStoreKeepsExistingSnapshotWhenReplacementFails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs.json")
+	store, err := NewJSONStore(path)
+	if err != nil {
+		t.Fatalf("NewJSONStore() error = %v", err)
+	}
+	old := testJob("saved", jobs.StatusQueued, time.Now())
+	old.Payload = json.RawMessage(`{"ticket":"old"}`)
+	if err := store.Create(ctx, old); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() before failed replacement error = %v", err)
+	}
+
+	replaceErr := errors.New("replacement blocked")
+	store.rename = func(_, _ string) error { return replaceErr }
+	updated := *old
+	updated.Payload = json.RawMessage(`{"ticket":"new"}`)
+	err = store.Update(ctx, &updated)
+	if !errors.Is(err, replaceErr) {
+		t.Fatalf("Update() error = %v, want replacement error", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "atomic") {
+		t.Fatalf("Update() error = %q, must not overstate replacement guarantees", err)
+	}
+
+	got, err := store.Get(ctx, "saved")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if string(got.Payload) != `{"ticket":"old"}` {
+		t.Fatalf("Get().Payload = %s, want old in-memory value after failed replacement", got.Payload)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() after failed replacement error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("jobs.json changed after failed replacement: got %q, want %q", after, before)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "jobs.json" {
+			t.Fatalf("failed replacement left temporary file %q", entry.Name())
+		}
 	}
 }
 

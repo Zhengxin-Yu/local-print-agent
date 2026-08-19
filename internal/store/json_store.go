@@ -254,10 +254,10 @@ func (s *JSONStore) writeLocked(ctx context.Context, values map[string]*jobs.Job
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	// os.Rename maps to replace semantics on Windows and POSIX. Keeping the
-	// replacement as one operation avoids a remove-then-rename window.
+	// Use one replacement operation, never a remove-then-rename sequence. The
+	// in-memory state is committed only when this call reports success.
 	if err := s.rename(temporaryPath, s.path); err != nil {
-		return fmt.Errorf("atomically replace jobs store %q: %w", s.path, err)
+		return fmt.Errorf("replace jobs store %q with completed temporary file: %w", s.path, err)
 	}
 	return nil
 }
