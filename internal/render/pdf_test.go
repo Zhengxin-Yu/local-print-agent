@@ -509,6 +509,146 @@ func TestPreviewRemainsReadableWhileRetryPublishesReplacement(t *testing.T) {
 	}
 }
 
+func TestPDFRendererRejectsPreexistingSymlinkJobDirectory(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	jobID := "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	jobsRoot := filepath.Join(root, "jobs")
+	if err := os.MkdirAll(jobsRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(jobsRoot, jobID)
+	if err := os.Symlink(outside, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("Windows user cannot create a directory symlink: %v", err)
+		}
+		t.Fatal(err)
+	}
+	runnerCalled := false
+	renderer := &PDFRenderer{outputDir: root, printToPDF: func(context.Context, string, string, pdfPrintOptions) ([]byte, error) {
+		runnerCalled = true
+		return []byte("%PDF-unsafe"), nil
+	}}
+	job := &jobs.Job{ID: jobID, Type: jobs.JobTypeBalloon, Payload: []byte(`{"team_name":"T","problem_id":"A","solved_at":"2026-08-19T09:30:00Z"}`)}
+	_, err := renderer.Render(context.Background(), job)
+	var jobError *jobs.JobError
+	if !errors.As(err, &jobError) || jobError.Code != jobs.ErrorCodeRenderFailed || jobError.Message != "PDF rendering failed" {
+		t.Fatalf("symlink render error = %T %v, want generic RENDER_FAILED", err, err)
+	}
+	if strings.Contains(jobError.Message, outside) {
+		t.Fatalf("public error leaked symlink target %q", jobError.Message)
+	}
+	if runnerCalled {
+		t.Fatal("renderer invoked browser through a symlinked job directory")
+	}
+	entries, readErr := os.ReadDir(outside)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("renderer wrote outside jobs root: entries=%v err=%v", entries, readErr)
+	}
+}
+
+func TestNewPDFRendererRejectsSymlinkOutputWithoutCreatingJobsAtTarget(t *testing.T) {
+	outside := t.TempDir()
+	parent := t.TempDir()
+	outputLink := filepath.Join(parent, "data-link")
+	if err := os.Symlink(outside, outputLink); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("Windows user cannot create a directory symlink: %v", err)
+		}
+		t.Fatal(err)
+	}
+	browser := filepath.Join(parent, "chrome")
+	if err := os.WriteFile(browser, []byte("browser"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outputBelowLink := filepath.Join(outputLink, "nested-data")
+	_, err := newPDFRenderer(outputBelowLink, browser, func(context.Context, string) (int, error) { return MinimumChromeMajor, nil })
+	if err == nil {
+		t.Fatal("NewPDFRenderer accepted a symlink output directory")
+	}
+	entries, readErr := os.ReadDir(outside)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("constructor wrote through output symlink: entries=%v err=%v", entries, readErr)
+	}
+}
+
+func TestPDFRendererRejectsInjectedWindowsReparsePointClassification(t *testing.T) {
+	for _, component := range []string{"output directory", "jobs root", "job directory"} {
+		t.Run(component, func(t *testing.T) {
+			root := t.TempDir()
+			jobID := "dededededededededededededededede"
+			jobsRoot := filepath.Join(root, "jobs")
+			destination := filepath.Join(jobsRoot, jobID)
+			if err := os.MkdirAll(destination, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			unsafePath := map[string]string{"output directory": root, "jobs root": jobsRoot, "job directory": destination}[component]
+			runnerCalled := false
+			renderer := &PDFRenderer{
+				outputDir: root,
+				pathUnsafe: func(path string, _ os.FileInfo) (bool, error) {
+					if runtime.GOOS == "windows" {
+						return strings.EqualFold(filepath.Clean(path), filepath.Clean(unsafePath)), nil
+					}
+					return filepath.Clean(path) == filepath.Clean(unsafePath), nil
+				},
+				printToPDF: func(context.Context, string, string, pdfPrintOptions) ([]byte, error) {
+					runnerCalled = true
+					return []byte("%PDF-unsafe"), nil
+				},
+			}
+			job := &jobs.Job{ID: jobID, Type: jobs.JobTypeBalloon, Payload: []byte(`{"team_name":"T","problem_id":"A","solved_at":"2026-08-19T09:30:00Z"}`)}
+			_, err := renderer.Render(context.Background(), job)
+			var jobError *jobs.JobError
+			if !errors.As(err, &jobError) || jobError.Message != "PDF rendering failed" {
+				t.Fatalf("injected reparse error = %T %v, want generic render failure", err, err)
+			}
+			if runnerCalled {
+				t.Fatal("renderer invoked browser through an injected reparse-point directory")
+			}
+		})
+	}
+}
+
+func TestPDFRendererRechecksDirectorySafetyAfterCreatingStagingFile(t *testing.T) {
+	root := t.TempDir()
+	jobID := "efefefefefefefefefefefefefefefef"
+	jobsRoot := filepath.Join(root, "jobs")
+	destination := filepath.Join(jobsRoot, jobID)
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	runnerCalled := false
+	renderer := &PDFRenderer{
+		outputDir: root,
+		pathUnsafe: func(path string, _ os.FileInfo) (bool, error) {
+			if filepath.Clean(path) == filepath.Clean(destination) {
+				checks++
+				return checks >= 7, nil
+			}
+			return false, nil
+		},
+		printToPDF: func(context.Context, string, string, pdfPrintOptions) ([]byte, error) {
+			runnerCalled = true
+			return []byte("%PDF-unsafe"), nil
+		},
+	}
+	job := &jobs.Job{ID: jobID, Type: jobs.JobTypeBalloon, Payload: []byte(`{"team_name":"T","problem_id":"A","solved_at":"2026-08-19T09:30:00Z"}`)}
+	_, err := renderer.Render(context.Background(), job)
+	var jobError *jobs.JobError
+	if !errors.As(err, &jobError) || jobError.Message != "PDF rendering failed" {
+		t.Fatalf("late reparse error = %T %v, want generic render failure", err, err)
+	}
+	if runnerCalled {
+		t.Fatal("renderer invoked browser after the staging directory became unsafe")
+	}
+	entries, readErr := os.ReadDir(destination)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("late safety failure left staging files: entries=%v err=%v", entries, readErr)
+	}
+}
+
 func TestNewPDFRendererRecoversLegacyInterruptedDirectoryPublish(t *testing.T) {
 	root := t.TempDir()
 	jobID := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"

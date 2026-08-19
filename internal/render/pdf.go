@@ -34,6 +34,7 @@ var (
 )
 
 type versionProbe func(context.Context, string) (int, error)
+type pathUnsafeFunc func(string, os.FileInfo) (bool, error)
 type pdfPrintOptions struct {
 	displayHeaderFooter            bool
 	headerTemplate, footerTemplate string
@@ -50,6 +51,7 @@ type PDFRenderer struct {
 	printToPDF  pdfPrintFunc
 	permitOnce  sync.Once
 	permit      chan struct{}
+	pathUnsafe  pathUnsafeFunc
 }
 
 var _ Renderer = (*PDFRenderer)(nil)
@@ -76,13 +78,14 @@ func newPDFRenderer(outputDir, browserPath string, probe versionProbe) (*PDFRend
 	if err != nil || major < MinimumChromeMajor {
 		return nil, &jobs.JobError{Code: jobs.ErrorCodeRendererUnsupported, Message: fmt.Sprintf("Chromium %d or newer is required", MinimumChromeMajor)}
 	}
-	if err := os.MkdirAll(filepath.Join(outputDir, "jobs"), 0o755); err != nil {
-		return nil, fmt.Errorf("create PDF jobs directory: %w", err)
+	renderer := &PDFRenderer{outputDir: outputDir, browserPath: resolved, printToPDF: chromedpPrintToPDF, pathUnsafe: platformPathUnsafe}
+	if err := renderer.ensureJobsRoot(); err != nil {
+		return nil, fmt.Errorf("prepare PDF jobs directory: %w", err)
 	}
-	if err := recoverInterruptedPublishes(filepath.Join(outputDir, "jobs")); err != nil {
+	if err := recoverInterruptedPublishes(filepath.Join(outputDir, "jobs"), renderer.pathUnsafeCheck()); err != nil {
 		return nil, fmt.Errorf("recover interrupted PDF publish: %w", err)
 	}
-	return &PDFRenderer{outputDir: outputDir, browserPath: resolved, printToPDF: chromedpPrintToPDF}, nil
+	return renderer, nil
 }
 
 func discoverBrowser(configured string) (string, error) {
@@ -277,10 +280,13 @@ func printOptionsForJob(job *jobs.Job) (pdfPrintOptions, error) {
 
 func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byte, options pdfPrintOptions) (result string, err error) {
 	jobsRoot := filepath.Join(r.outputDir, "jobs")
-	if err := os.MkdirAll(jobsRoot, 0o755); err != nil {
-		return "", fmt.Errorf("create PDF jobs directory: %w", err)
+	if err := r.ensureJobsRoot(); err != nil {
+		return "", fmt.Errorf("prepare PDF jobs directory: %w", err)
 	}
 	destination := filepath.Join(jobsRoot, jobID)
+	if err := r.validatePublishDirectories(destination); err != nil {
+		return "", err
+	}
 	_, statErr := os.Stat(destination)
 	createdDestination := os.IsNotExist(statErr)
 	if statErr != nil && !os.IsNotExist(statErr) {
@@ -288,6 +294,9 @@ func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byt
 	}
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return "", fmt.Errorf("create render directory: %w", err)
+	}
+	if err := r.validatePublishDirectories(destination); err != nil {
+		return "", err
 	}
 	var temporaryPaths []string
 	defer func() {
@@ -306,7 +315,8 @@ func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byt
 		}
 	}()
 
-	htmlPath, err := writeTemporaryFile(destination, ".render-*.html", html, 0o600)
+	validateDestination := func() error { return r.validatePublishDirectories(destination) }
+	htmlPath, err := writeTemporaryFile(destination, ".render-*.html", html, 0o600, validateDestination)
 	if err != nil {
 		return "", fmt.Errorf("write render HTML: %w", err)
 	}
@@ -325,15 +335,21 @@ func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byt
 	if !strings.HasPrefix(string(pdf), "%PDF-") {
 		return "", errors.New("renderer returned an invalid PDF")
 	}
-	pdfPath, err := writeTemporaryFile(destination, ".render-*.pdf", pdf, 0o600)
+	pdfPath, err := writeTemporaryFile(destination, ".render-*.pdf", pdf, 0o600, validateDestination)
 	if err != nil {
 		return "", fmt.Errorf("write preview PDF: %w", err)
 	}
 	temporaryPaths = append(temporaryPaths, pdfPath)
+	if err := validateDestination(); err != nil {
+		return "", err
+	}
 	if err := atomicReplaceFile(pdfPath, filepath.Join(destination, "preview.pdf")); err != nil {
 		return "", fmt.Errorf("publish preview PDF: %w", err)
 	}
 	temporaryPaths[1] = ""
+	if err := validateDestination(); err != nil {
+		return "", err
+	}
 	if err := atomicReplaceFile(htmlPath, filepath.Join(destination, "render.html")); err != nil {
 		return "", fmt.Errorf("publish render HTML: %w", err)
 	}
@@ -341,7 +357,10 @@ func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byt
 	return filepath.Join(destination, "preview.pdf"), nil
 }
 
-func writeTemporaryFile(directory, pattern string, contents []byte, permissions os.FileMode) (path string, err error) {
+func writeTemporaryFile(directory, pattern string, contents []byte, permissions os.FileMode, validateDirectory func() error) (path string, err error) {
+	if err := validateDirectory(); err != nil {
+		return "", err
+	}
 	temporary, err := os.CreateTemp(directory, pattern)
 	if err != nil {
 		return "", err
@@ -360,6 +379,9 @@ func writeTemporaryFile(directory, pattern string, contents []byte, permissions 
 			}
 		}
 	}()
+	if err := validateDirectory(); err != nil {
+		return "", err
+	}
 	if err := temporary.Chmod(permissions); err != nil {
 		return "", err
 	}
@@ -376,14 +398,14 @@ func writeTemporaryFile(directory, pattern string, contents []byte, permissions 
 	return temporaryPath, nil
 }
 
-func recoverInterruptedPublishes(jobsRoot string) error {
+func recoverInterruptedPublishes(jobsRoot string, check pathUnsafeFunc) error {
 	entries, err := os.ReadDir(jobsRoot)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !entry.IsDir() || !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, "-previous") {
+		if !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, "-previous") {
 			continue
 		}
 		jobID := strings.TrimSuffix(strings.TrimPrefix(name, "."), "-previous")
@@ -392,17 +414,158 @@ func recoverInterruptedPublishes(jobsRoot string) error {
 		}
 		legacy := filepath.Join(jobsRoot, name)
 		destination := filepath.Join(jobsRoot, jobID)
+		legacyInfo, infoErr := os.Lstat(legacy)
+		if infoErr != nil {
+			return infoErr
+		}
+		if unsafe, unsafeErr := isUnsafeRenderPath(legacy, legacyInfo, check); unsafeErr != nil {
+			return unsafeErr
+		} else if unsafe {
+			return errors.New("interrupted render path is unsafe")
+		}
+		if !legacyInfo.IsDir() {
+			continue
+		}
 		if _, statErr := os.Stat(destination); os.IsNotExist(statErr) {
 			if err := os.Rename(legacy, destination); err != nil {
 				return err
 			}
+			if err := validateExistingRenderDirectory(destination, check); err != nil {
+				return err
+			}
 		} else if statErr != nil {
 			return statErr
-		} else if err := os.RemoveAll(legacy); err != nil {
+		} else {
+			if err := validateExistingRenderDirectory(destination, check); err != nil {
+				return err
+			}
+			if err := os.RemoveAll(legacy); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *PDFRenderer) pathUnsafeCheck() pathUnsafeFunc {
+	if r != nil && r.pathUnsafe != nil {
+		return r.pathUnsafe
+	}
+	return platformPathUnsafe
+}
+
+func (r *PDFRenderer) ensureJobsRoot() error {
+	if r == nil || strings.TrimSpace(r.outputDir) == "" {
+		return errors.New("PDF renderer output directory is required")
+	}
+	if err := validateNoUnsafeExistingComponents(r.outputDir, r.pathUnsafeCheck()); err != nil {
+		return err
+	}
+	if err := validateExistingRenderDirectory(r.outputDir, r.pathUnsafeCheck()); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(r.outputDir, 0o755); err != nil {
+			return err
+		}
+		if err := validateExistingRenderDirectory(r.outputDir, r.pathUnsafeCheck()); err != nil {
+			return err
+		}
+	}
+	jobsRoot := filepath.Join(r.outputDir, "jobs")
+	if err := validateExistingRenderDirectory(jobsRoot, r.pathUnsafeCheck()); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Mkdir(jobsRoot, 0o755); err != nil {
+			return err
+		}
+	}
+	return r.validatePublishDirectories("")
+}
+
+func (r *PDFRenderer) validatePublishDirectories(destination string) error {
+	if r == nil {
+		return errors.New("PDF renderer is not initialized")
+	}
+	paths := []string{r.outputDir, filepath.Join(r.outputDir, "jobs")}
+	if destination != "" {
+		paths = append(paths, destination)
+	}
+	for index, path := range paths {
+		if err := validateNoUnsafeExistingComponents(path, r.pathUnsafeCheck()); err != nil {
+			return err
+		}
+		err := validateExistingRenderDirectory(path, r.pathUnsafeCheck())
+		if os.IsNotExist(err) && index == len(paths)-1 && destination != "" {
+			continue
+		}
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validateNoUnsafeExistingComponents(path string, check pathUnsafeFunc) error {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	var components []string
+	for current := absolute; ; current = filepath.Dir(current) {
+		components = append(components, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	for index := len(components) - 1; index >= 0; index-- {
+		component := components[index]
+		info, err := os.Lstat(component)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		unsafe, err := isUnsafeRenderPath(component, info, check)
+		if err != nil {
+			return err
+		}
+		if unsafe {
+			return errors.New("render path contains a link or reparse point")
+		}
+	}
+	return nil
+}
+
+func validateExistingRenderDirectory(path string, check pathUnsafeFunc) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	unsafe, err := isUnsafeRenderPath(path, info, check)
+	if err != nil {
+		return err
+	}
+	if unsafe {
+		return errors.New("render path contains a link or reparse point")
+	}
+	if !info.IsDir() {
+		return errors.New("render path component is not a directory")
+	}
+	return nil
+}
+
+func isUnsafeRenderPath(path string, info os.FileInfo, check pathUnsafeFunc) (bool, error) {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true, nil
+	}
+	if check == nil {
+		check = platformPathUnsafe
+	}
+	return check(path, info)
 }
 
 func fileURL(path string) (string, error) {
