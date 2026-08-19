@@ -133,6 +133,51 @@ func TestValidateCreateRequest(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "rejects balloon timestamp with comma fractional seconds",
+			request: CreateJobRequest{
+				Type:        JobTypeBalloon,
+				PrinterName: "front-desk",
+				Payload:     json.RawMessage(`{"team_name":"Team Atlas","problem_id":"A","solved_at":"2026-08-19T09:30:00,5Z"}`),
+			},
+			wantErr: true,
+		},
+		{
+			name: "rejects payload with trailing JSON",
+			request: CreateJobRequest{
+				Type:        JobTypeSource,
+				PrinterName: "front-desk",
+				Payload:     json.RawMessage(`{"language":"go","source_code":"func main() {}"} {}`),
+			},
+			wantErr: true,
+		},
+		{
+			name: "rejects null payload",
+			request: CreateJobRequest{
+				Type:        JobTypeSource,
+				PrinterName: "front-desk",
+				Payload:     json.RawMessage(`null`),
+			},
+			wantErr: true,
+		},
+		{
+			name: "rejects null required payload field",
+			request: CreateJobRequest{
+				Type:        JobTypeBalloon,
+				PrinterName: "front-desk",
+				Payload:     json.RawMessage(`{"team_name":null,"problem_id":"A","solved_at":"2026-08-19T09:30:00Z"}`),
+			},
+			wantErr: true,
+		},
+		{
+			name: "rejects payload field with wrong JSON type",
+			request: CreateJobRequest{
+				Type:        JobTypeSource,
+				PrinterName: "front-desk",
+				Payload:     json.RawMessage(`{"language":"go","source_code":42}`),
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -145,22 +190,71 @@ func TestValidateCreateRequest(t *testing.T) {
 	}
 }
 
-func TestValidateCreateRequestNormalizesPayloadStrings(t *testing.T) {
+func TestNormalizeCreateRequestReturnsDeepCopiedNormalizedRequest(t *testing.T) {
 	req := CreateJobRequest{
-		Type:        JobTypeBalloon,
+		Type:        JobType(" source_code "),
+		PrinterName: "  hallway  printer  ",
+		Payload:     json.RawMessage("{\"language\":\" go \",\"source_code\":\"  alpha  \u2028beta\u2029gamma  \"}"),
+	}
+	alias := req.Payload
+	before := string(req.Payload)
+
+	normalized, err := NormalizeCreateRequest(req)
+	if err != nil {
+		t.Fatalf("NormalizeCreateRequest() error = %v", err)
+	}
+
+	if normalized.Type != JobTypeSource {
+		t.Fatalf("Type = %q, want %q", normalized.Type, JobTypeSource)
+	}
+	if normalized.PrinterName != "hallway  printer" {
+		t.Fatalf("PrinterName = %q, want internal spaces preserved", normalized.PrinterName)
+	}
+	if got, want := string(normalized.Payload), `{"language":"go","source_code":"alpha  \u2028beta\u2029gamma"}`; got != want {
+		t.Fatalf("Payload = %q, want %q", got, want)
+	}
+	if got := string(req.Payload); got != before {
+		t.Fatalf("input Payload changed to %q, want %q", got, before)
+	}
+	if got := string(alias); got != before {
+		t.Fatalf("RawMessage alias changed to %q, want %q", got, before)
+	}
+	if &normalized.Payload[0] == &req.Payload[0] {
+		t.Fatal("normalized Payload aliases input Payload")
+	}
+}
+
+func TestNormalizeCreateRequestNormalizesBalloonPayloadStrings(t *testing.T) {
+	normalized, err := NormalizeCreateRequest(CreateJobRequest{
+		Type:        JobType(" balloon_ticket "),
+		PrinterName: "  front  desk  ",
+		Payload:     json.RawMessage(`{"team_name":"  Team  Atlas  ","problem_id":" A ","solved_at":" 2026-08-19T09:30:00Z "}`),
+	})
+	if err != nil {
+		t.Fatalf("NormalizeCreateRequest() error = %v", err)
+	}
+
+	if normalized.Type != JobTypeBalloon || normalized.PrinterName != "front  desk" {
+		t.Fatalf("request = %#v, want normalized top-level strings", normalized)
+	}
+	if got, want := string(normalized.Payload), `{"team_name":"Team  Atlas","problem_id":"A","solved_at":"2026-08-19T09:30:00Z"}`; got != want {
+		t.Fatalf("Payload = %q, want %q", got, want)
+	}
+}
+
+func TestValidateCreateRequestDoesNotModifyRequest(t *testing.T) {
+	req := CreateJobRequest{
+		Type:        JobType(" balloon_ticket "),
 		PrinterName: " front-desk ",
 		Payload:     json.RawMessage(`{"team_name":"  Team  Atlas  ","problem_id":" A ","solved_at":"2026-08-19T09:30:00Z"}`),
 	}
+	before := req
+	beforePayload := string(req.Payload)
 
 	if err := ValidateCreateRequest(req); err != nil {
 		t.Fatalf("ValidateCreateRequest() error = %v", err)
 	}
-
-	var payload BalloonPayload
-	if err := json.Unmarshal(req.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.TeamName != "Team  Atlas" || payload.ProblemID != "A" {
-		t.Fatalf("payload = %#v, want trimmed display strings", payload)
+	if req.Type != before.Type || req.PrinterName != before.PrinterName || string(req.Payload) != beforePayload {
+		t.Fatalf("ValidateCreateRequest() modified request: got %#v, want %#v", req, before)
 	}
 }
