@@ -28,9 +28,14 @@ const (
 type ErrorCode string
 
 const (
-	ErrorCodeInvalidTransition ErrorCode = "invalid_transition"
-	ErrorCodeRenderFailed      ErrorCode = "render_failed"
-	ErrorCodePrintFailed       ErrorCode = "print_failed"
+	ErrorCodeInvalidTransition ErrorCode = "INVALID_TRANSITION"
+	ErrorCodeInvalidRequest    ErrorCode = "INVALID_REQUEST"
+	ErrorCodeQueueFull         ErrorCode = "QUEUE_FULL"
+	ErrorCodeRetryNotAllowed   ErrorCode = "RETRY_NOT_ALLOWED"
+	ErrorCodeStore             ErrorCode = "STORE_ERROR"
+	ErrorCodeContextCanceled   ErrorCode = "CONTEXT_CANCELED"
+	ErrorCodeRenderFailed      ErrorCode = "RENDER_FAILED"
+	ErrorCodePrintFailed       ErrorCode = "PRINT_COMMAND_FAILED"
 )
 
 // JobError provides a stable machine-readable code alongside a readable
@@ -38,6 +43,7 @@ const (
 type JobError struct {
 	Code    ErrorCode `json:"code"`
 	Message string    `json:"message"`
+	cause   error
 }
 
 func (e *JobError) Error() string {
@@ -45,6 +51,14 @@ func (e *JobError) Error() string {
 		return ""
 	}
 	return e.Message
+}
+
+// Unwrap retains the underlying storage or context error for diagnostics.
+func (e *JobError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
 }
 
 // Job contains the fields required by the future persistent job state machine.
