@@ -70,12 +70,44 @@ func TestRenderSourceHTMLHighlightsSupportedLanguagesAndPreservesSourceAsText(t 
 			if strings.Contains(page, "<iostream>") || !strings.Contains(page, "&lt;") || !strings.Contains(page, "iostream") || !strings.Contains(page, "&gt;") {
 				t.Error("source code was interpreted as HTML instead of escaped text")
 			}
-			for _, want := range []string{"@page { size: A4;", "white-space: pre-wrap", "overflow-wrap: anywhere", "counter(page)"} {
-				if !strings.Contains(page, want) {
-					t.Errorf("source HTML missing print styling %q", want)
-				}
-			}
+			assertSourcePrintContract(t, page)
 		})
+	}
+}
+
+func TestRenderSourceHTMLUsesLineStructureForWrappedCode(t *testing.T) {
+	job := &jobs.Job{Type: jobs.JobTypeSource, Payload: json.RawMessage(`{"language":"go","source_code":"// 第一行\n// 第二行"}`)}
+	html, err := RenderSourceHTML(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(html)
+	for _, want := range []string{
+		`<span class="line"><span class="ln">1</span><span class="cl">`,
+		`<span class="line"><span class="ln">2</span><span class="cl">`,
+		`.chroma .line { display: flex; align-items: flex-start; }`,
+		`.chroma .ln { flex: none; color: #6a737d; padding-right: 1em; user-select: none; }`,
+		`.chroma .cl { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("source HTML missing exact Chroma line contract %q", want)
+		}
+	}
+}
+
+func assertSourcePrintContract(t *testing.T, page string) {
+	t.Helper()
+	for _, want := range []string{
+		"@page {\n  size: A4;\n  margin: 22mm 13mm 18mm;\n  @bottom-center {\n    content: \"第 \" counter(page) \" / \" counter(pages) \" 页\";\n    font-family: \"Microsoft YaHei\", sans-serif;\n    font-size: 8pt;\n  }\n}",
+		".page-header { position: fixed; top: 0; left: 0; right: 0; min-height: 12mm; border-bottom: 1px solid #777; padding-bottom: 2mm; font-family: \"Microsoft YaHei\", sans-serif; font-size: 9pt; }",
+		"main { padding-top: 14mm; }",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("source HTML missing exact print contract %q", want)
+		}
+	}
+	if strings.Contains(page, "page-footer") || strings.Contains(page, `<footer`) {
+		t.Error("source HTML retains the obsolete fixed footer instead of a page margin box")
 	}
 }
 
