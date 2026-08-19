@@ -57,8 +57,8 @@ type Job struct {
 	Error       *JobError       `json:"error,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
-	StartedAt   time.Time       `json:"started_at,omitempty"`
-	FinishedAt  time.Time       `json:"finished_at,omitempty"`
+	StartedAt   *time.Time      `json:"started_at,omitempty"`
+	FinishedAt  *time.Time      `json:"finished_at,omitempty"`
 	Attempts    int             `json:"attempts"`
 	PDFPath     string          `json:"pdf_path,omitempty"`
 }

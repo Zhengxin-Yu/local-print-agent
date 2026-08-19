@@ -94,7 +94,7 @@ stateDiagram-v2
     succeeded --> [*]
 ```
 
-进入 `rendering` 时写入 `started_at` 并使 `attempts + 1`；失败或成功时写入 `finished_at`；重试进入 `queued` 时清理运行时间、完成时间和旧错误，下一次真正渲染才增加尝试次数。
+进入 `rendering` 时写入 `started_at` 并使 `attempts + 1`；失败或成功时写入 `finished_at`；重试进入 `queued` 时将运行时间、完成时间和旧错误清理为 `nil`，因此 queued JSON 不包含 `started_at`/`finished_at`，下一次真正渲染才增加尝试次数。
 
 ## 今日完成
 

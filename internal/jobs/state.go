@@ -40,19 +40,24 @@ func Transition(job *Job, to Status, now time.Time) error {
 
 	switch to {
 	case StatusRendering:
-		job.StartedAt = now
-		job.FinishedAt = time.Time{}
+		job.StartedAt = timestampPointer(now)
+		job.FinishedAt = nil
 		job.Attempts++
 		job.Error = nil
 	case StatusFailed:
-		job.FinishedAt = now
+		job.FinishedAt = timestampPointer(now)
 	case StatusSucceeded:
-		job.FinishedAt = now
+		job.FinishedAt = timestampPointer(now)
 		job.Error = nil
 	case StatusQueued:
-		job.StartedAt = time.Time{}
-		job.FinishedAt = time.Time{}
+		job.StartedAt = nil
+		job.FinishedAt = nil
 		job.Error = nil
 	}
 	return nil
+}
+
+func timestampPointer(value time.Time) *time.Time {
+	timestamp := value
+	return &timestamp
 }
