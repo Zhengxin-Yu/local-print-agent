@@ -16,7 +16,7 @@ Linux 命令行示例需 curl 7.76+ 才支持 `--fail-with-body`；不具备时�
 ./scripts/run-linux.sh --mode demo --go-cache .cache/go-build
 ```
 
-记录终端输出的实际 URL，并令 `$base`/`$BASE` 指向它。准备一段至少 6 字节、含中文注释和缩进的 C++ 源码。
+记录终端输出的实际 URL，并令 `$base`/`$BASE` 指向它。演示默认直接打开该同源 URL，不从磁盘打开 HTML。终端同时给出的 `web/index.html?local_print_agent_token=<per-launch-token>` 只用于可选 `file://` 模式，能力值每次启动变化，不应在录屏或报告中复用。准备一段至少 6 字节、含中文注释和缩进的 C++ 源码。
 
 如果默认 Go cache 不可写，在用于 API/测试的第二终端也独立设置（启动脚本不会修改父终端环境）：
 
@@ -46,7 +46,7 @@ export GOCACHE="$PWD/.cache/go-demo-test"
 
 **讲解顺序**：
 
-1. 同源 Web 调用 7 个 HTTP 接口，只监听 `127.0.0.1`。
+1. 嵌入式同源 Web 调用 7 个 HTTP 接口，只监听 `127.0.0.1`；可选 `file://` 模式必须携带终端给出的本次启动能力值。
 2. Job Service 先写 JSON Store，再把 ID 放入容量 100 的 FIFO。
 3. 单 Worker 依次执行 `queued → rendering → printing → succeeded/failed`。
 4. 气球使用 HTML 模板；源码由 Chroma 高亮；Chrome 131+ 固化为 PDF。

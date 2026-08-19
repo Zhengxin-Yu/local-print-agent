@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"io"
 	"io/fs"
 	"mime"
@@ -30,7 +32,8 @@ type Dependencies struct {
 	Printers printer.Adapter
 	Web      fs.FS
 	// PreviewRoot is the data/jobs directory controlled by PDFRenderer.
-	PreviewRoot string
+	PreviewRoot     string
+	FileOriginToken string
 }
 
 type router struct{ dependencies Dependencies }
@@ -42,7 +45,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 }
 
 func (r router) ServeHTTP(w http.ResponseWriter, request *http.Request) {
-	if corsForFileOrigin(w, request) {
+	if corsForFileOrigin(w, request, r.dependencies.FileOriginToken) {
 		return
 	}
 	if request.URL.Path == "/health" {
@@ -104,8 +107,11 @@ func (r router) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	r.serveWeb(w, request)
 }
 
-func corsForFileOrigin(w http.ResponseWriter, request *http.Request) bool {
+func corsForFileOrigin(w http.ResponseWriter, request *http.Request, expectedToken string) bool {
 	if request.Header.Get("Origin") != "null" || (request.URL.Path != "/health" && !strings.HasPrefix(request.URL.Path, "/api/v1/")) {
+		return false
+	}
+	if expectedToken == "" || !equalFileOriginToken(expectedToken, request.URL.Query().Get("local_print_agent_token")) {
 		return false
 	}
 	w.Header().Set("Access-Control-Allow-Origin", "null")
@@ -117,6 +123,12 @@ func corsForFileOrigin(w http.ResponseWriter, request *http.Request) bool {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.WriteHeader(http.StatusNoContent)
 	return true
+}
+
+func equalFileOriginToken(expected, provided string) bool {
+	expectedDigest := sha256.Sum256([]byte(expected))
+	providedDigest := sha256.Sum256([]byte(provided))
+	return subtle.ConstantTimeCompare(expectedDigest[:], providedDigest[:]) == 1
 }
 
 func (r router) serveWeb(w http.ResponseWriter, request *http.Request) {

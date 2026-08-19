@@ -19,7 +19,7 @@
 
 ## 干净启动验证
 
-- 启动前的当前工作树副本：`../local-print-agent-task14-clean-20260819-04`，82 个文件；复制器显式拒绝 `.git/`、`.worktrees/`、`.superpowers/`、`.tmp*`、`data/`、`.cache/`，README SHA-256 与当前工作树一致。demo 运行时按预期新建 `.cache/` 与 `data/`。
+- 启动前创建了一个未提交的外部干净副本，共 82 个文件；复制器显式拒绝 `.git/`、`.worktrees/`、`.superpowers/`、`.tmp*`、`data/`、`.cache/`，README SHA-256 与当前工作树一致。demo 运行时按预期新建 `.cache/` 与 `data/`。
 - 严格执行 README 中不含 `-BrowserPath` 的 Windows demo 主命令后，应用自动发现浏览器，服务监听 `http://127.0.0.1:17653`；`/health` 返回 `service=local-print-agent`、`status=ok`、API `v1`，并发现 Mock Printer。
 - 合法新建任务 `809b3c736979ffe2ac9466441f8c4fa2`，最终状态为 `succeeded`、`attempts=1`；preview 返回 HTTP 200、`application/pdf`、35,180 bytes。
 - `Ctrl+C` 停止后进程退出，端口 17653 可重新绑定。全程 `demo`，未访问系统打印队列。
@@ -89,7 +89,7 @@
 
 ### 路径契约 TDD
 
-- 覆盖文件：`docs/path_contract_test.go`。新增表驱动 `TestAbsoluteFilePathPatterns`，逐项覆盖 Windows drive、两种 UNC、`~/` 与 `~\`、23 个 POSIX/macOS 系统根路径；负例覆盖 Windows/POSIX 项目相对路径、HTTP URL、reference URL 和 API route。
+- 覆盖文件：`docs/path_contract_test.go`。新增表驱动 `TestAbsoluteFilePathPatterns`，逐项覆盖 Windows drive、两种 UNC、两种斜杠方向的 home shorthand、23 个 POSIX/macOS 系统根路径；负例覆盖 Windows/POSIX 项目相对路径、HTTP URL、reference URL 和 API route。
 - RED：`go test ./docs -run '^TestAbsoluteFilePathPatterns$' -count=1 -v` 返回 exit 1；23 个新增行为子测试失败，而既有 drive、4 个已覆盖根路径和全部允许项通过，证明失败来自缺失匹配而非误报。
 - GREEN：扩展 boundary-aware regexp 后，同一命令返回 exit 0；34 个表驱动子测试全部通过。
 - 覆盖 GREEN：直接执行 README PowerShell cache 片段后，`go env GOCACHE` 与从 `.cache/go-test` 解析的 `.FullName` 完全一致；随后 `go test ./docs -run '^(TestAbsoluteFilePathPatterns|TestSubmissionDocumentsUseRelativeFilePaths)$' -count=1 -v` 返回 exit 0，两项测试通过。
@@ -103,8 +103,8 @@
 
 ### 当前 README 干净副本证据
 
-- 验证位置：`../local-print-agent-task14-clean-20260819-04`。启动前副本有 82 个文件，不含 `.git/.worktrees/.superpowers/.tmp/data/.cache`；README hash 与当前修正工作树一致。启动后只新增应用预期的 `.cache/` 与 `data/`。
-- 首次复制审计发现文件型 `.tmp-linux-printer.test` 未被目录排除规则捕获，因此保留为 `../local-print-agent-task14-clean-20260819-04-rejected` 并使用同时排除文件/目录的规则重新创建最终副本；未把首次副本当作证据。
+- 验证使用一个未提交的外部干净副本。启动前副本有 82 个文件，不含 `.git/.worktrees/.superpowers/.tmp/data/.cache`；README hash 与当前修正工作树一致。启动后只新增应用预期的 `.cache/` 与 `data/`。
+- 首次复制审计发现文件型 `.tmp-linux-printer.test` 未被目录排除规则捕获，因此废弃该外部副本，并使用同时排除文件/目录的规则重新创建最终副本；未把首次副本当作证据。
 - 环境确认 `LOCAL_PRINT_AGENT_PRINTER_MODE`、`LOCAL_PRINT_AGENT_BROWSER_PATH`、`LOCAL_PRINT_AGENT_SUMATRA_PATH`、`GOCACHE` 均未预设；执行 `.\scripts\run-windows.ps1 -Mode demo -GoCachePath '.cache\go-build'`，终端明确输出未提供 browser path、将使用 `PATH` 和常见安装位置，随后监听 `http://127.0.0.1:17653`。
 - `/health` 实际返回 `service=local-print-agent`、`status=ok`、`api_version=v1`；打印机为 `Mock Printer（不执行实体打印）`。
 - 使用新构造且不含 `id` 的合法 balloon create request，得到任务 `809b3c736979ffe2ac9466441f8c4fa2`；最终 `succeeded`、`attempts=1`，`pdf_path` 为 `data/jobs/<jobID>/preview.pdf`。

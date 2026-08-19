@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -13,6 +14,10 @@ var absoluteFilePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?m)(^|[\s'"` + "`" + `(])(?:\\\\|//)[^\\/\s]+[\\/]`),
 	regexp.MustCompile(`(?m)(^|[\s'"` + "`" + `(])~[\\/]`),
 	regexp.MustCompile(`(?m)(^|[\s'"` + "`" + `(])/(bin|boot|dev|etc|home|lib|lib64|media|mnt|opt|proc|root|run|sbin|srv|sys|tmp|usr|var|Users|Applications|Library|System)/`),
+}
+
+var repositoryEscapingPathPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)(^|[\s'"` + "`" + `(])(?:[A-Za-z0-9._-]+[\\/])*(?:\.\.[\\/])+[^\s'"` + "`" + `)<>\]}]+`),
 }
 
 func TestAbsoluteFilePathPatterns(t *testing.T) {
@@ -73,13 +78,48 @@ func TestAbsoluteFilePathPatterns(t *testing.T) {
 	}
 }
 
+func TestRepositoryEscapingPathPatterns(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "parent slash path", value: "open ../outside/file.pdf", want: true},
+		{name: "nested parent slash path", value: "fixture `../../testdata/source.json`", want: true},
+		{name: "parent backslash path", value: `open ..\outside\file.pdf`, want: true},
+		{name: "nested parent backslash path", value: `fixture ..\..\testdata\source.json`, want: true},
+		{name: "prefixed slash escape", value: "open docs/../../outside/file.pdf", want: true},
+		{name: "prefixed backslash escape", value: `open docs\..\..\outside\file.pdf`, want: true},
+		{name: "HTTP URL traversal segment", value: "https://example.test/a/../reference", want: false},
+		{name: "API route", value: "/api/v1/print-jobs/../reference", want: false},
+		{name: "ordinary prose punctuation", value: "版本 1.2.3... next sentence", want: false},
+		{name: "repository root relative", value: "testdata/source.json docs/reports/day-05.md", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := false
+			for _, pattern := range repositoryEscapingPathPatterns {
+				if pattern.MatchString(test.value) {
+					got = true
+					break
+				}
+			}
+			if got != test.want {
+				t.Fatalf("repository escape match for %q = %v, want %v", test.value, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSubmissionDocumentsUseRelativeFilePaths(t *testing.T) {
 	root := filepath.Clean("..")
 	var files []string
-	files = append(files, filepath.Join(root, "README.md"))
-	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if entry.IsDir() && path != root && excludedMarkdownDirectory(entry.Name()) {
+			return filepath.SkipDir
 		}
 		if !entry.IsDir() && strings.EqualFold(filepath.Ext(path), ".md") {
 			files = append(files, path)
@@ -89,6 +129,7 @@ func TestSubmissionDocumentsUseRelativeFilePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sort.Strings(files)
 
 	for _, path := range files {
 		contents, err := os.ReadFile(path)
@@ -96,11 +137,26 @@ func TestSubmissionDocumentsUseRelativeFilePaths(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		for _, pattern := range absoluteFilePathPatterns {
+		patterns := append(append([]*regexp.Regexp(nil), absoluteFilePathPatterns...), repositoryEscapingPathPatterns...)
+		for _, pattern := range patterns {
 			if match := pattern.Find(contents); match != nil {
-				t.Errorf("%s contains absolute file path %q; submission documents must use paths relative to the repository root", filepath.ToSlash(path), match)
+				relative, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					relative = path
+				}
+				t.Errorf("%s contains prohibited file path %q; submission documents must use paths relative to the repository root without parent escapes", filepath.ToSlash(relative), match)
 			}
 		}
+	}
+}
+
+func excludedMarkdownDirectory(name string) bool {
+	lower := strings.ToLower(name)
+	switch lower {
+	case ".git", ".cache", "data", "node_modules", "vendor":
+		return true
+	default:
+		return strings.HasPrefix(lower, ".tmp-")
 	}
 }
 

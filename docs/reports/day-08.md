@@ -60,7 +60,7 @@
 | 固定顺序 8 分钟演示脚本 | 完成 | `docs/demo-script.md`；8 段时间点从 00:00 连续至 08:00。 |
 | Windows/Linux 脚本显式 demo/platform | 完成 | `scripts/run-windows.ps1`、`scripts/run-linux.sh`；AST/`bash -n`、非法参数和依赖前置检查。 |
 | Linux 脚本 LF 交付 | 完成 | `.gitattributes` 固定 `*.sh text eol=lf`，避免 Windows 打包后 shebang 变为 `bash\r`。 |
-| 干净副本不带版本库/缓存/数据 | 完成 | 启动前的当前工作树副本 `../local-print-agent-task14-clean-20260819-04` 有 82 个文件；复制器显式拒绝 `.git/.worktrees/.superpowers/.tmp/data/.cache`，README SHA-256 与当前工作树一致。demo 运行时按预期新建 `.cache/` 与 `data/`；该目录是本机临时验证物，不提交。 |
+| 干净副本不带版本库/缓存/数据 | 完成 | 一个未提交的外部干净副本有 82 个文件；复制器显式拒绝 `.git/.worktrees/.superpowers/.tmp/data/.cache`，README SHA-256 与当前工作树一致。demo 运行时按预期新建 `.cache/` 与 `data/`；该副本是本机临时验证物，不提交。 |
 | 只按当前 README 启动至 health/打印机/创建/预览 | 完成 | 严格执行不含 `-BrowserPath` 的 demo 主命令；服务自动发现浏览器并监听 `http://127.0.0.1:17653`；`/health` 返回 `service=local-print-agent`、`status=ok`、API `v1`；发现 Mock Printer；合法新建任务 `809b3c736979ffe2ac9466441f8c4fa2` 最终为 `succeeded`、`attempts=1`；preview 返回 HTTP 200、`application/pdf`、35,180 bytes；停止后进程退出且端口可重新绑定。全程未访问系统打印队列。 |
 | 真人同学只看 README 启动 | 未做 | 无真人参与；见第 3 节待执行清单。 |
 | Windows 系统队列录屏 | 未做 | 无 SumatraPDF/已确认自动保存虚拟队列；未向系统队列提交。 |

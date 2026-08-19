@@ -33,6 +33,10 @@ git diff --check
 | 请求超限 | 大于 1 MiB 的 HTTP JSON | HTTP 413 / `REQUEST_BODY_TOO_LARGE` |
 | 队列满 | 使用真实 Service 提交 101 个任务 | 前 100 个持久化，第 101 个返回 503 / `QUEUE_FULL` |
 | 服务重启 | 重新打开 JSON Store 后执行恢复 | `rendering/printing` 持久化为 `SERVICE_RESTARTED`，`queued` 保持待处理 |
+| 同一数据目录二次启动 | 第一个真实 OS 实例锁仍持有时再次启动 | 第二次在 builder/Store/恢复前返回 `ErrAlreadyRunning`；失败启动和完整关闭后可重新取得锁 |
+| HTTP 关闭中仍有 handler | handler 阻塞时取消服务 context | `running.Done` 保持打开；handler 返回后等待 `Shutdown` 与 Worker，再释放端口和实例锁 |
+| 可选 `file://` 控制台 | null-origin GET/OPTIONS 使用正确、错误和缺失能力值 | 只有本次启动的正确能力值获得 CORS；空配置默认拒绝 |
+| 浏览器能力传播 | Node VM 执行实际 `app.js` 的 `file:` 模式 | health、所有 API fetch 和 preview URL 都携带能力值；嵌入式同源路径不添加 |
 
 内容边界必须同时覆盖：中文队名和注释、首行 Tab 与末尾换行原样保留、HTML 标签转义、65536 UTF-8 字节上界接受与 65537 字节拒绝、长行换行 CSS、多页源码、非法 RFC3339 时间。
 

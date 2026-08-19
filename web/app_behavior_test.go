@@ -35,6 +35,29 @@ func TestAppJavaScriptRunsDiscoveryRenderingAndTimerLifecycle(t *testing.T) {
 	}
 }
 
+func TestAppJavaScriptPropagatesFileOriginCapabilityToRequestsAndPreview(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node.js is unavailable; portable static web contracts still run")
+	}
+	source, err := fs.ReadFile(Assets, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appPath := filepath.Join(t.TempDir(), "app.js")
+	if err := os.WriteFile(appPath, source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(node, "-e", fileOriginCapabilityHarness, appPath)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute file-origin app.js behavior contract: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "file capability ok") {
+		t.Fatalf("unexpected Node.js output: %s", output)
+	}
+}
+
 const browserBehaviorHarness = `
 const fs = require("fs");
 const vm = require("vm");
@@ -97,4 +120,73 @@ nativeSetTimeout(() => {
     process.exitCode = 1;
   }
 }, 25);
+`
+
+const fileOriginCapabilityHarness = `
+const fs = require("fs");
+const vm = require("vm");
+const appPath = process.argv[process.argv.length - 1];
+const nativeSetTimeout = global.setTimeout;
+const token = "launch+capability";
+
+class Element {
+  constructor(id = "") { this.id = id; this.children = []; this.listeners = {}; this.textContent = ""; this.hidden = true; this.value = ""; this.disabled = false; }
+  append(...items) { this.children.push(...items); }
+  replaceChildren(...items) { this.children = [...items]; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  querySelector() { return new Element("submit"); }
+  reportValidity() { return true; }
+}
+const elements = new Map();
+const byId = (id) => { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); };
+for (const id of ["page-error", "connection-status", "api-version", "service-port", "jobs-body", "job-detail", "printer-select", "printer-hint", "balloon-form", "source-form", "refresh-jobs", "balloon-solved-at", "balloon-team-name", "balloon-problem-id", "source-language", "source-code"]) byId(id);
+byId("balloon-solved-at").value = "2026-08-19T09:30";
+byId("balloon-team-name").value = "Team";
+byId("balloon-problem-id").value = "A";
+global.document = { getElementById: byId, createElement: () => new Element() };
+
+global.window = {
+  location: { protocol: "file:", origin: "null", search: "?local_print_agent_token=launch%2Bcapability" },
+  addEventListener: () => {},
+  setInterval: () => 17,
+  clearInterval: () => {},
+};
+
+const calls = [];
+const response = (data) => ({ ok: true, status: 200, json: async () => data });
+global.fetch = async (url, options = {}) => {
+  const parsed = new URL(url);
+  calls.push({ parsed, options });
+  if (parsed.searchParams.get("local_print_agent_token") !== token) throw new Error("missing file-origin capability: " + url);
+  if (parsed.pathname === "/health") return response({ service: "local-print-agent", api_version: "v1", status: "ok" });
+  if (parsed.pathname === "/api/v1/printers") return response({ data: [{ name: "Mock Printer", is_default: true }], error: null });
+  if (parsed.pathname === "/api/v1/print-jobs/job1/retry") return response({ data: { id: "job1" }, error: null });
+  if (parsed.pathname === "/api/v1/print-jobs/job1") return response({ data: { id: "job1", pdf_path: "data/jobs/job1/preview.pdf" }, error: null });
+  if (parsed.pathname === "/api/v1/print-jobs" && options.method === "POST") return response({ data: { id: "created" }, error: null });
+  if (parsed.pathname === "/api/v1/print-jobs") return response({ data: [{ id: "job1", created_at: "2026-08-19T09:00:00Z", type: "balloon_ticket", printer_name: "Mock Printer", status: "failed", error: { message: "failed" } }], error: null });
+  throw new Error("unexpected fetch " + url);
+};
+
+function assert(condition, message) { if (!condition) throw new Error(message); }
+vm.runInThisContext(fs.readFileSync(appPath, "utf8"), { filename: appPath });
+
+nativeSetTimeout(async () => {
+  try {
+    assert(byId("connection-status").textContent === "已连接", "file console did not connect with its capability");
+    const firstRow = byId("jobs-body").children[0];
+    await firstRow.children[5].children[0].listeners.click();
+    const preview = byId("job-detail").children[1];
+    assert(new URL(preview.href).searchParams.get("local_print_agent_token") === token, "preview URL omitted the file-origin capability");
+    await firstRow.children[5].children[1].listeners.click();
+    byId("balloon-form").listeners.submit({ preventDefault: () => {}, currentTarget: byId("balloon-form") });
+    await new Promise((resolve) => nativeSetTimeout(resolve, 25));
+    const paths = new Set(calls.map((call) => call.parsed.pathname));
+    for (const required of ["/health", "/api/v1/printers", "/api/v1/print-jobs", "/api/v1/print-jobs/job1", "/api/v1/print-jobs/job1/retry"]) assert(paths.has(required), "missing request " + required);
+    for (const call of calls) assert(call.parsed.searchParams.get("local_print_agent_token") === token, "request omitted capability: " + call.parsed.href);
+    process.stdout.write("file capability ok\n");
+  } catch (error) {
+    console.error(error.stack || error);
+    process.exitCode = 1;
+  }
+}, 50);
 `

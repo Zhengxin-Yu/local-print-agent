@@ -13,10 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"local-print-agent/internal/config"
+	"local-print-agent/internal/instance"
 	"local-print-agent/internal/jobs"
 	"local-print-agent/internal/printer"
 	"local-print-agent/internal/render"
@@ -46,6 +48,149 @@ func TestStartServesHealthAndShutsDownWithContext(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not stop after context cancellation")
+	}
+}
+
+func TestStartWithBuilderRejectsSecondSameDataDirBeforeBuilder(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{Host: "127.0.0.1", FirstPort: 0, LastPort: 0, DataDir: dataDir}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	first, err := startWithBuilder(firstContext, cfg, testApplicationBuilder(t))
+	if err != nil {
+		cancelFirst()
+		t.Fatal(err)
+	}
+
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	secondBuilderCalled := false
+	second, err := startWithBuilder(secondContext, cfg, func(config.Config) (*application, error) {
+		secondBuilderCalled = true
+		return testApplicationBuilder(t)(cfg)
+	})
+	if second != nil {
+		cancelSecond()
+		<-second.Done
+	}
+	if !errors.Is(err, instance.ErrAlreadyRunning) {
+		cancelFirst()
+		<-first.Done
+		t.Fatalf("second start error = %v, want ErrAlreadyRunning", err)
+	}
+	if secondBuilderCalled {
+		cancelFirst()
+		<-first.Done
+		t.Fatal("second start invoked the application builder")
+	}
+	cancelSecond()
+
+	cancelFirst()
+	if err := <-first.Done; err != nil {
+		t.Fatal(err)
+	}
+	reacquired, err := instance.Acquire(dataDir)
+	if err != nil {
+		t.Fatalf("lock remains held after graceful completion: %v", err)
+	}
+	if err := reacquired.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartWithBuilderReleasesLockWhenBuilderFails(t *testing.T) {
+	dataDir := t.TempDir()
+	want := errors.New("builder failed")
+	observedLock := false
+	_, err := startWithBuilder(context.Background(), config.Config{DataDir: dataDir}, func(config.Config) (*application, error) {
+		contender, lockErr := instance.Acquire(dataDir)
+		if contender != nil {
+			_ = contender.Close()
+		}
+		observedLock = errors.Is(lockErr, instance.ErrAlreadyRunning)
+		return nil, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("start error = %v, want builder error", err)
+	}
+	if !observedLock {
+		t.Fatal("data directory lock was not held before the builder ran")
+	}
+	assertInstanceLockAvailable(t, dataDir)
+}
+
+func TestStartWithBuilderReleasesLockWhenListenerFails(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	dataDir := t.TempDir()
+	port := occupied.Addr().(*net.TCPAddr).Port
+	observedLock := false
+	_, err = startWithBuilder(context.Background(), config.Config{Host: "127.0.0.1", FirstPort: port, LastPort: port, DataDir: dataDir}, func(cfg config.Config) (*application, error) {
+		contender, lockErr := instance.Acquire(dataDir)
+		if contender != nil {
+			_ = contender.Close()
+		}
+		observedLock = errors.Is(lockErr, instance.ErrAlreadyRunning)
+		return testApplicationBuilder(t)(cfg)
+	})
+	if err == nil {
+		t.Fatal("start succeeded with its only candidate port occupied")
+	}
+	if !observedLock {
+		t.Fatal("data directory lock was not held while the listener was created")
+	}
+	assertInstanceLockAvailable(t, dataDir)
+}
+
+func TestStartWithBuilderGeneratesDistinctFileOriginCapabilities(t *testing.T) {
+	type launch struct {
+		running  *runningServer
+		cancel   context.CancelFunc
+		received string
+	}
+	launches := make([]launch, 0, 2)
+	for index := 0; index < 2; index++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cfg := config.Config{Host: "127.0.0.1", FirstPort: 0, LastPort: 0, DataDir: t.TempDir()}
+		var received string
+		running, err := startWithBuilder(ctx, cfg, func(cfg config.Config) (*application, error) {
+			received = cfg.FileOriginToken
+			return testApplicationBuilder(t)(cfg)
+		})
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		launches = append(launches, launch{running: running, cancel: cancel, received: received})
+	}
+	defer func() {
+		for _, current := range launches {
+			current.cancel()
+			<-current.running.Done
+		}
+	}()
+	for index, current := range launches {
+		if current.running.FileOriginToken == "" {
+			t.Fatalf("launch %d returned an empty file-origin capability", index)
+		}
+		if current.received != current.running.FileOriginToken {
+			t.Fatalf("launch %d builder capability did not match running server", index)
+		}
+	}
+	if launches[0].running.FileOriginToken == launches[1].running.FileOriginToken {
+		t.Fatal("two launches reused the same file-origin capability")
+	}
+}
+
+func assertInstanceLockAvailable(t *testing.T, dataDir string) {
+	t.Helper()
+	lock, err := instance.Acquire(dataDir)
+	if err != nil {
+		t.Fatalf("instance lock remains held: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -112,6 +257,95 @@ func TestRunningDoneWaitsForWorkerAndActiveRendererCleanup(t *testing.T) {
 		t.Fatalf("server port remains occupied after Done: %v", err)
 	}
 	listener.Close()
+}
+
+func TestRunningDoneWaitsForActiveHTTPHandlerAndShutdownCompletion(t *testing.T) {
+	dataDir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	running, err := startWithBuilder(ctx, config.Config{Host: "127.0.0.1", FirstPort: 0, LastPort: 0, DataDir: dataDir}, func(cfg config.Config) (*application, error) {
+		built, err := testApplicationBuilder(t)(cfg)
+		if err != nil {
+			return nil, err
+		}
+		built.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(entered)
+			<-release
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("handler completed"))
+		})
+		return built, nil
+	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+
+	responseDone := make(chan error, 1)
+	go func() {
+		response, err := (&http.Client{Timeout: 3 * time.Second}).Get(running.URL + "/blocking")
+		if err != nil {
+			responseDone <- err
+			return
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			responseDone <- err
+			return
+		}
+		if response.StatusCode != http.StatusOK || string(body) != "handler completed" {
+			responseDone <- errors.New("blocking handler response was incomplete")
+			return
+		}
+		responseDone <- nil
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("blocking handler did not start")
+	}
+
+	cancel()
+	select {
+	case err := <-running.Done:
+		unblock()
+		t.Fatalf("running.Done closed before HTTP shutdown completed: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case err := <-responseDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active handler response did not complete")
+	}
+	select {
+	case err := <-running.Done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("running.Done did not close after HTTP shutdown completed")
+	}
+	parsed, err := url.Parse(running.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", parsed.Host)
+	if err != nil {
+		t.Fatalf("server port remains occupied after Done: %v", err)
+	}
+	listener.Close()
+	assertInstanceLockAvailable(t, dataDir)
 }
 
 func TestBuildApplicationProvidesAVisibleFakePrinter(t *testing.T) {

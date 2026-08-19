@@ -13,12 +13,13 @@ const (
 )
 
 type Config struct {
-	Host           string
-	FirstPort      int
-	LastPort       int
-	DataDir        string
-	SumatraPDFPath string
-	PrinterMode    PrinterMode
+	Host            string
+	FirstPort       int
+	LastPort        int
+	DataDir         string
+	SumatraPDFPath  string
+	PrinterMode     PrinterMode
+	FileOriginToken string
 }
 
 func Default() Config {

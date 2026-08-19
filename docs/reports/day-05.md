@@ -27,8 +27,8 @@
 
 ## 任务 JSON
 
-- [气球小票完整 JSON](../../testdata/balloon.json)：包含比赛、队伍、房间、题号、气球颜色和 RFC3339 通过时间。
-- [长 C++ 源码完整 JSON](../../testdata/source_cpp.json)：包含 140 行可见源码、中文注释和完整竞赛元数据，用于稳定触发多页。
+- `testdata/balloon.json`：包含比赛、队伍、房间、题号、气球颜色和 RFC3339 通过时间。
+- `testdata/source_cpp.json`：包含 140 行可见源码、中文注释和完整竞赛元数据，用于稳定触发多页。
 
 API 提交时只提取两个文件的 `type`、`printer_name` 和 `payload`；`id` 仅是渲染固定样例，不得把包含 `id` 的整个 fixture 直接 POST 到严格 API。真实 API 会自行生成安全 jobID。
 

@@ -11,7 +11,7 @@
 
 当前可复现的主证据是 Windows `demo` 模式：浏览器由脚本自动发现，`/health` 返回 `service=local-print-agent`、`status=ok`、API `v1`，打印机为“Mock Printer（不执行实体打印）”；任务 `809b3c736979ffe2ac9466441f8c4fa2` 最终为 `succeeded`、`attempts=1`，预览返回 HTTP 200、`application/pdf`、35,180 bytes，停止后端口释放。该证据没有访问操作系统打印队列。
 
-自动验证基线为 142 个顶层测试：136 通过、6 跳过、0 失败；11 个含测试包通过，race 检查 11 个包且 0 race，vet、module verify 和 diff 检查通过。Windows 平台适配器已由受控 runner 验证；Linux 适配器及其受控边界测试代码已交叉编译，但没有在 Linux 内核运行，也没有 CUPS request id。真人同学仅看 README 启动、Windows 安全虚拟/系统队列录屏、Linux/CUPS runtime 与录屏均未完成。本报告不以 Fake Printer、受控 runner、Windows demo、交叉编译、历史截图或代理审查替代这些人工证据，也不声称录屏已经独立完成。
+自动验证基线为 152 个顶层测试：146 通过、6 跳过、0 失败；12 个含测试包通过，race 检查 12 个包且 0 race，vet、module verify 和 diff 检查通过。Windows 平台适配器已由受控 runner 验证；Linux 适配器、新增实例锁和主应用已完成交叉编译，但没有在 Linux 内核运行，也没有 CUPS request id。真人同学仅看 README 启动、Windows 安全虚拟/系统队列录屏、Linux/CUPS runtime 与录屏均未完成。本报告不以 Fake Printer、受控 runner、Windows demo、交叉编译、历史截图或代理审查替代这些人工证据，也不声称录屏已经独立完成。
 
 ## 2. 课题背景与项目目标
 
@@ -91,6 +91,9 @@ Lodop 只作为商业方案比较。借鉴点是“网页调用本机服务”�
 
 ```mermaid
 flowchart LR
+    Startup[进程启动] --> Lock[DataDir 实例锁]
+    Lock --> API
+    Lock --> Store
     Browser[浏览器 / 嵌入式 Web] -->|HTTP JSON| API[HTTP API]
     API --> Service[Job Service]
     Service --> Store[(JSON Store)]
@@ -148,6 +151,7 @@ sequenceDiagram
 | --- | --- |
 | `cmd/local-print-agent/` | 应用装配、监听、信号、HTTP 与 Worker 协同关闭 |
 | `internal/config/` | 固定回环地址、候选端口、数据目录和打印模式 |
+| `internal/instance/` | Windows `LockFileEx`、Unix `Flock` 数据目录实例锁 |
 | `internal/httpapi/` | 7 个接口、统一 envelope、CORS、静态 Web 和 preview |
 | `internal/jobs/` | Job、输入规范化、状态机、Service 和 FIFO 发送端 |
 | `internal/store/` | JSON 原子替换、克隆隔离、排序和重启恢复 |
@@ -156,6 +160,8 @@ sequenceDiagram
 | `internal/printer/` | Fake、Windows SumatraPDF、Linux CUPS Adapter |
 | `templates/`、`web/` | 嵌入式打印模板和 Mock Web 控制台 |
 | `scripts/`、`testdata/`、`docs/` | 双平台入口、验收数据和交付文档 |
+
+`startWithBuilder` 在应用 builder、Store 打开和重启恢复之前非阻塞取得实例锁。builder、listener 或其他启动阶段失败都会释放；成功启动后，锁只在 HTTP `Shutdown` 明确完成且 Worker `Done` 后释放。`running.Done` 因而同时代表 handler 排空、Worker 清理、端口和数据目录所有权释放。
 
 ## 7. 任务模型与状态机
 
@@ -175,7 +181,7 @@ stateDiagram-v2
 
 进入 `rendering` 时写 `started_at`、清旧错误并使 `attempts + 1`；`failed` 和 `succeeded` 写 `finished_at`；重试只允许 `failed -> queued`，清空本次运行时间和旧错误，但 attempts 保留到下一次进入 rendering 再增加。
 
-JSON Store 用同目录临时文件、flush 和单次替换写入。重启时，遗留在 `rendering` 或 `printing` 的任务被标记为 `failed/SERVICE_RESTARTED`，原有 `queued` 任务按创建顺序恢复入当前进程的私有队列。系统保证进程内最终状态持久化重试不会再次调用 `Print`；但平台命令已接受、`succeeded` 尚未落盘时崩溃，人工重试仍可能重复提交，所以平台边界是 at-least-once，不是 exactly-once。
+JSON Store 用同目录临时文件、flush 和单次替换写入。重启时，遗留在 `rendering` 或 `printing` 的任务被标记为 `failed/SERVICE_RESTARTED`，原有 `queued` 任务按创建顺序恢复入当前进程的私有队列。同一 DataDir 的另一个进程会在 Store 打开、恢复或排队前因实例锁失败，不能通过候选端口回退共享快照。系统保证进程内最终状态持久化重试不会再次调用 `Print`；但平台命令已接受、`succeeded` 尚未落盘时崩溃，人工重试仍可能重复提交，所以平台边界是 at-least-once，不是 exactly-once。
 
 ## 8. HTTP API 与 Mock Web
 
@@ -193,7 +199,7 @@ JSON Store 用同目录临时文件、flush 和单次替换写入。重启时，
 
 创建请求体上限为 1 MiB，顶层和 payload 均拒绝未知字段及多余 JSON 值。异步 Worker 可能在客户端读取 202 前推进状态，因此调用方不能假设创建响应一定仍是 `queued`。
 
-Mock Web 嵌入可执行文件，自动发现 17653-17660 中返回正确 health 身份的服务，展示打印机、两类表单、按时间倒序的任务列表、详情、预览和失败重试，每 2 秒刷新。动态错误通过 `textContent` 写入，Node 行为测试验证发现顺序、渲染、文本安全、轮询和 unload 清理。来自 `file://` 的 `Origin: null` 只对 health 与 `/api/v1/` 开放 GET、POST 和 `Content-Type` 预检；普通网页 Origin 不获得 localhost CORS 授权。
+Mock Web 嵌入可执行文件，默认直接打开服务输出的回环 URL，与 API 同源；页面展示打印机、两类表单、按时间倒序的任务列表、详情、预览和失败重试，每 2 秒刷新。动态错误通过 `textContent` 写入。可选 `file://` 模式使用每次启动由 256-bit `crypto/rand` 生成并只在本地终端指令中显示的能力值；页面把它附到 health、所有 API fetch 和 preview URL。Router 对正确能力值使用固定长度 digest 的常量时间比较，只有同时满足 `Origin: null`、API 路径和能力正确才返回窄范围 CORS；缺失、错误或空配置均不授权。能力值不进入 Job 或错误载荷。Node 行为测试分别验证同源发现/渲染/轮询，以及 file 模式的全请求与 preview 传播。
 
 完整字段、响应和双端命令见 `docs/api.md`。
 
@@ -246,15 +252,16 @@ Windows Adapter 构造时要求 SumatraPDF 文件；枚举后会重新检查目�
 安全措施按边界分层：
 
 1. 网络：固定 `127.0.0.1`，端口仅在 17653-17660 选择；不提供远程 host 配置。
-2. 请求：严格 JSON、未知字段拒绝、1 MiB 上限、业务字段与 UTF-8 byte 边界校验。
-3. Web：嵌入静态文件白名单、动态文本不写 `innerHTML`、`file://` CORS 只开放本地 API。
-4. 文件：jobID 只接受 32 位小写 hex；渲染与预览只允许固定 jobs 根和 `preview.pdf`；拒绝越界、错误文件名、symlink 或 Windows reparse point。
-5. 发布：HTML/PDF 在同目录 staging，flush 后原子替换；重试期间 preview 读取旧完整文件或新完整文件，不读取半文件。
-6. 命令：打印机名必须来自本轮枚举；参数数组直接传给进程，不经 shell；命令超时和取消可传播。
-7. 诊断：Job 响应会公开项目相对的生成文件字段 `pdf_path`；错误响应和持久化错误不暴露浏览器、profile、数据目录、Sumatra、PDF 的绝对路径或命令输出诊断。主进程也不记录完整源码或 Worker 原始错误文本。
-8. 默认模式：`demo` 明确显示“不执行实体打印”；未确认安全队列时不运行 `platform`。
+2. 进程所有权：DataDir 的跨进程非阻塞实例锁先于 Store/恢复，启动失败全部释放，正常运行只在 HTTP 与 Worker 完整结束后释放。
+3. 请求：严格 JSON、未知字段拒绝、1 MiB 上限、业务字段与 UTF-8 byte 边界校验。
+4. Web：嵌入静态文件白名单、动态文本不写 `innerHTML`；默认同源，可选 `file://` 的 null-origin CORS 还要求本次启动能力值并使用常量时间比较。
+5. 文件：jobID 只接受 32 位小写 hex；渲染与预览只允许固定 jobs 根和 `preview.pdf`；拒绝越界、错误文件名、symlink 或 Windows reparse point。
+6. 发布：HTML/PDF 在同目录 staging，flush 后原子替换；重试期间 preview 读取旧完整文件或新完整文件，不读取半文件。
+7. 命令：打印机名必须来自本轮枚举；参数数组直接传给进程，不经 shell；命令超时和取消可传播。
+8. 诊断：Job 响应会公开项目相对的生成文件字段 `pdf_path`；错误响应和持久化错误不暴露浏览器、profile、数据目录、Sumatra、PDF 的绝对路径或命令输出诊断。主进程也不记录完整源码或 Worker 原始错误文本。
+9. 默认模式：页面明确区分 demo 的 Mock Printer 与 platform 的系统队列提交；未确认安全队列时不运行 `platform`。
 
-已知残余风险包括：本地同账户进程仍可调用回环 API；没有认证和多用户隔离；JSON Store 不支持多进程；平台提交存在 at-least-once 崩溃窗口；`succeeded` 不证明物理出纸。
+已知残余风险包括：本地同账户进程仍可直接调用回环 API，启动能力只约束 opaque/null origin 而不是完整登录认证；没有多用户隔离；JSON Store 仍是单进程格式但同一 DataDir 已强制单实例；平台提交存在 at-least-once 崩溃窗口；`succeeded` 不证明物理出纸。
 
 ## 13. 测试方案与结果
 
@@ -265,10 +272,11 @@ Windows Adapter 构造时要求 SumatraPDF 文件；枚举后会重新检查目�
 | 模型 | 校验、规范化、状态迁移、JSON 生命周期 | `TestValidateCreateRequest`、`TestCanTransitionAllowsOnlyDocumentedPaths` |
 | Service/Store | 唯一 ID、队列满、重试、原子持久化、重启恢复 | `TestAPIConcurrentCreatePersistsTwentyUniqueJobs`、`TestJSONStoreRestartRecoveryIsDurableAndDoesNotRequeueInterruptedWork` |
 | Worker | FIFO、无并发重叠、渲染/打印失败、退避、取消 | `TestWorkerProcessesTwentyJobsFIFOWithoutOverlap`、`TestWorkerUsesBoundedExponentialBackoffForStoreRetries` |
-| HTTP/Web | 7 路由、envelope、body 上限、preview Range、CORS、真实 JS 行为 | `TestAPIPreviewServesOnlyStoredJobPDFWithSafeHeadersAndRange`、`TestAppJavaScriptRunsDiscoveryRenderingAndTimerLifecycle` |
+| 启动/生命周期 | DataDir 实例锁、builder/listener 失败释放、HTTP handler 排空、Worker 清理 | `TestStartWithBuilderRejectsSecondSameDataDirBeforeBuilder`、`TestRunningDoneWaitsForActiveHTTPHandlerAndShutdownCompletion` |
+| HTTP/Web | 7 路由、envelope、body 上限、preview Range、能力 CORS、真实 JS 行为 | `TestFileOriginCORSRequiresLaunchCapability`、`TestAppJavaScriptPropagatesFileOriginCapabilityToRequestsAndPreview` |
 | Render | 模板转义、高亮、长行、分页契约、路径与原子发布 | `TestRenderSourceHTMLUsesLineStructureForWrappedCode`、`TestPreviewRemainsReadableWhileRetryPublishesReplacement` |
 | Printer | 枚举解析、严格参数、allowlist、超时、路径和脱敏 | `TestWindowsAdapterPrintUsesEnumeratedNameAndStrictSumatraArguments`、`TestLinuxAdapterPrintUsesEnumeratedNameAndStrictLPArguments` |
-| 交付 | 文档路径、启动脚本、README 干净副本主路径 | `TestAbsoluteFilePathPatterns`、`TestSubmissionDocumentsUseRelativeFilePaths`、Day 8 记录 |
+| 交付 | 文档绝对路径/父目录逃逸、启动脚本、README 干净副本主路径 | `TestRepositoryEscapingPathPatterns`、`TestSubmissionDocumentsUseRelativeFilePaths`、Day 8 记录 |
 
 上表中的 Linux Printer 测试名表示交叉编译所包含的受控边界契约；当前 Windows 验证没有执行该 build-tag 测试，不能据此声称 Linux/CUPS 通过。
 
@@ -282,8 +290,8 @@ Windows Adapter 构造时要求 SumatraPDF 文件；枚举后会重新检查目�
 
 | 命令 | 结果 |
 | --- | --- |
-| `go test ./... -count=1` | 142 个顶层测试：136 pass、6 skip、0 fail；11 个含测试包通过，`templates` 无测试文件 |
-| `go test -race ./... -count=1` | 11 个含测试包通过，0 race；`templates` 无测试文件 |
+| `go test ./... -count=1` | JSON 统计 152 个顶层测试：146 pass、6 skip、0 fail；12 个含测试包通过，`templates` 无测试文件 |
+| `go test -race ./... -count=1` | 12 个含测试包通过，0 race；`templates` 无测试文件 |
 | `go vet ./...` | exit 0，无诊断 |
 | `go mod verify` | `all modules verified` |
 | `git diff --check` | exit 0；无 whitespace error |
@@ -370,6 +378,14 @@ Windows Adapter 构造时要求 SumatraPDF 文件；枚举后会重新检查目�
 - 复测：`TestAppJavaScriptRunsDiscoveryRenderingAndTimerLifecycle` 验证 health 优先、打印机和任务渲染、倒序、安全文本、2 秒轮询与 unload 清理。
 - 后续：Node 不可用时仍保留 Go 静态安全契约，并明确行为用例为 skip，不能伪装通过。
 
+### 16.6 最终审查发现跨进程与来源授权缺口
+
+- 现象：第二进程可回退端口却共享同一 `jobs.json`；任意 opaque origin 只需发送 `Origin: null` 即可获得 CORS；`running.Done` 还可能早于活动 HTTP handler 结束。
+- 根因：初始装配把端口、Store、CORS 和关闭分别实现，没有定义 DataDir 的进程所有权、file 页面的证明能力，也没有把 `Shutdown` 返回纳入完成信号。
+- 修复：新增 Windows/Linux advisory instance lock；每次启动生成随机 file-origin capability 并在 Router 固定长度 digest 上常量时间比较；分离 Serve 与 Shutdown completion channel，最终等待 HTTP、Worker 后释放锁。
+- 复测：真实锁竞争、builder/listener 失败释放、正确/错误/缺失能力 GET/OPTIONS、Node 全请求传播和阻塞 handler 都先 RED 后 GREEN；Linux lock/application 另做交叉编译。
+- 后续：能力值不是账户认证；若扩展到多用户或远程来源，应增加显式身份与 CSRF/授权模型，而不是放宽当前回环边界。
+
 ## 17. 独立完成与 AI 辅助说明
 
 本项目的需求梳理、范围决策、架构设计、编码、自动测试、手工 demo 验证、文档编写和提交整理均由本人独立完成。AI 仅作为辅助审查和工具使用，用于提示边界案例、帮助检索代码与文档、执行可重复命令和进行只读复核；关键方案、代码改动、测试输出、证据口径和最终文字均由本人逐项审查确认。
@@ -378,11 +394,11 @@ AI/代理审查不是同学验收、操作系统打印队列证据或真人录�
 
 ## 18. 总结
 
-9 天开发完成了一个可运行的 Go 回环打印代理：浏览器可提交气球和源码任务；任务有持久化 FIFO、状态、失败原因和重试；Chrome 生成安全可预览 PDF；默认 demo 不打印；显式 platform 才进入 Windows SumatraPDF 或 Linux CUPS 边界；请求、文件和命令均有防越界与脱敏措施。
+9 天开发完成了一个可运行的 Go 回环打印代理：浏览器可提交气球和源码任务；任务有持久化 FIFO、状态、失败原因和重试；Chrome 生成安全可预览 PDF；同一 DataDir 强制单实例；默认嵌入式 Web 同源，可选 file 页面需要本次启动能力；默认 demo 不打印；显式 platform 才进入 Windows SumatraPDF 或 Linux CUPS 边界；请求、文件和命令均有防越界与脱敏措施。
 
 最重要的跨平台经验是把业务渲染统一为 PDF，把平台差异限制在小型 Adapter；同时必须把“代码存在”“受控命令正确”“操作系统队列接受”“物理出纸”视为四个不同证据层级。当前代码层已完成；Windows 受控命令层已运行，Linux 受控测试只完成交叉编译；Windows demo 可复现；系统队列和物理输出层仍缺 Windows 安全队列与 Linux/CUPS 实机材料。
 
-未来可扩展但当前未实现的方向包括认证/来源限制、SQLite 或队列数据库、多 Worker 与设备级串行、平台作业号持久化、幂等提交协议、更多纸张模板、上游 OJ 显式集成和 CI 中的真实 Chrome/Linux 运行。它们不计入本次已完成功能。
+未来可扩展但当前未实现的方向包括完整登录与多用户授权、SQLite 或队列数据库、多 Worker 与设备级串行、平台作业号持久化、幂等提交协议、更多纸张模板、上游 OJ 显式集成和 CI 中的真实 Chrome/Linux 运行。它们不计入本次已完成功能。
 
 ## 19. 参考资料
 

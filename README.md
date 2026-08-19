@@ -24,7 +24,9 @@ HTTP API ── Job Service ── JSON Store
         Windows SumatraPDF / Linux CUPS
 ```
 
-Web、API、Worker 和适配器运行在同一进程。任务状态为 `queued → rendering → printing → succeeded`；渲染或打印失败进入 `failed`，失败任务可手动重试。
+Web、API、Worker 和适配器运行在同一进程。进程先取得 `data/` 的非阻塞独占实例锁，再装配 Store、执行恢复和启动 Worker；同一数据目录的第二个进程会在读取或恢复 `jobs.json` 前失败。任务状态为 `queued → rendering → printing → succeeded`；渲染或打印失败进入 `failed`，失败任务可手动重试。
+
+默认入口是终端给出的回环 URL，控制台与 API 同源，不需要跨源授权。可选的 `file://` 入口只接受本次启动在本地终端输出的 `web/index.html?local_print_agent_token=<per-launch-token>` 指令；能力值每次启动重新生成，裸 `web/index.html`、缺失或错误能力值都不会获得 null-origin CORS 授权。不要把该能力值写入任务或共享给其他页面。
 
 ## 环境要求
 
@@ -49,7 +51,7 @@ Web、API、Worker 和适配器运行在同一进程。任务状态为 `queued �
    .\scripts\run-windows.ps1 -Mode demo -GoCachePath '.cache\go-build'
    ```
 
-4. 终端会输出实际 URL，例如 `http://127.0.0.1:17653`。在浏览器打开它；如果 17653 被占用，以终端实际输出为准。
+4. 终端会输出实际 URL，例如 `http://127.0.0.1:17653`。在浏览器打开它；如果 17653 被占用，以终端实际输出为准。只有确实需要从磁盘打开页面时，才使用同一终端紧随其后输出的、含本次启动能力值的可选指令。
 5. 按 `Ctrl+C` 停止服务。
 
 自动发现失败、且你已自行将浏览器放入 `tools/` 时，可改用：
@@ -158,13 +160,14 @@ if [[ -e .git ]]; then git diff --check; fi
 | `PREVIEW_NOT_READY` | PDF 尚在生成或生成失败；刷新任务详情，先检查任务状态和错误。 |
 | `print queue is full` | 内存队列容量为 100；等待已有任务完成后再提交或重试。 |
 | 17653 无法访问 | 服务可能回退到 17654–17660；使用终端输出的实际 URL。 |
+| `another local-print-agent instance is using this data directory` | 已有进程持有同一 `data/` 实例锁。停止该进程并等待其 HTTP 与 Worker 完成关闭后再启动；不要通过改端口绕过。 |
 | Chrome 返回 `context canceled` | 可能受容器、桌面权限或组策略限制；在普通本机终端复验并保留原始失败，不能以单元测试替代真实 Chrome 证据。 |
 
 ## 限制
 
 - 不实现完整 OJ、登录权限、浏览器插件、桌面 GUI、云打印或自研驱动。
 - 只提供单 Worker FIFO，队列容量 100；不并发打印。
-- 运行数据保存在单机 JSON 文件，不是多进程数据库。
+- 运行数据保存在单机 JSON 文件，不是多进程数据库；进程级实例锁明确拒绝同一数据目录的并发使用。
 - OS 命令提交存在 at-least-once 崩溃窗口：系统已接受但成功状态尚未持久化时，人工重试可能重复提交。
 - `succeeded` 不等于物理出纸；虚拟/实体队列结果必须另行取证。
 - 当前仓库的 Windows 系统队列、Linux/CUPS 实跑、真人仅看 README 启动和双平台录屏仍需在具备相应环境时人工完成，不能用受控测试或交叉编译替代。
@@ -175,6 +178,7 @@ if [[ -e .git ]]; then git diff --check; fi
 cmd/local-print-agent/  主程序装配、监听与关闭
 internal/config/        固定端口和环境变量配置
 internal/httpapi/       7 个 HTTP 接口与嵌入式网页路由
+internal/instance/      Windows/Linux 数据目录实例锁
 internal/jobs/          请求校验、任务模型、状态机和 FIFO Service
 internal/render/        HTML、Chroma 高亮、Chrome PDF 与安全发布
 internal/printer/       demo、Windows SumatraPDF、Linux CUPS 适配器

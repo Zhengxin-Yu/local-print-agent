@@ -43,7 +43,7 @@ docs/reports/                每日说明、审查记录和截图
 | POST | `/api/v1/print-jobs/{id}/retry` | 路径 ID | 200 | 404、409、503、500 |
 | GET | `/api/v1/print-jobs/{id}/preview` | 路径 ID | — | 501（当前未实现） |
 
-从 `file://` 打开页面时，仅 Origin 为 `null` 的 API 请求允许 GET、POST 和 `Content-Type` 预检；任意网页 Origin 不会获得 localhost CORS 授权。
+Day 4 初版曾仅凭 `Origin: null` 开放 GET、POST 和 `Content-Type` 预检。最终安全审查已加固：默认使用嵌入式同源页面；可选 `file://` 页面还必须为每个 health/API/preview URL 携带本次启动在本地终端输出的随机能力值，缺失或错误值不获得 CORS，普通网页 Origin 也不授权。
 
 ## 页面截图
 

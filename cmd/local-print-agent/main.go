@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -14,6 +16,7 @@ import (
 
 	"local-print-agent/internal/config"
 	"local-print-agent/internal/httpapi"
+	"local-print-agent/internal/instance"
 	"local-print-agent/internal/printer"
 	"local-print-agent/internal/render"
 	"local-print-agent/internal/server"
@@ -30,8 +33,9 @@ type application struct {
 }
 
 type runningServer struct {
-	URL  string
-	Done <-chan error
+	URL             string
+	FileOriginToken string
+	Done            <-chan error
 }
 
 type platformPrinterFactory func(printer.PlatformConfig) (printer.Adapter, error)
@@ -79,7 +83,7 @@ func buildApplicationWithRendererAndPrinterFactory(cfg config.Config, renderer r
 	if _, err := service.ResumeQueued(context.Background()); err != nil {
 		return nil, fmt.Errorf("restore queued jobs: %w", err)
 	}
-	return &application{Handler: httpapi.NewRouter(httpapi.Dependencies{Jobs: service, Printers: printers, Web: web.Assets, PreviewRoot: filepath.Join(cfg.DataDir, "jobs")}), worker: jobWorker}, nil
+	return &application{Handler: httpapi.NewRouter(httpapi.Dependencies{Jobs: service, Printers: printers, Web: web.Assets, PreviewRoot: filepath.Join(cfg.DataDir, "jobs"), FileOriginToken: cfg.FileOriginToken}), worker: jobWorker}, nil
 }
 
 func configuredPrinter(cfg config.Config, platformFactory platformPrinterFactory) (printer.Adapter, error) {
@@ -110,13 +114,31 @@ func start(ctx context.Context, cfg config.Config) (*runningServer, error) {
 	return startWithBuilder(ctx, cfg, buildApplication)
 }
 
-func startWithBuilder(ctx context.Context, cfg config.Config, builder func(config.Config) (*application, error)) (*runningServer, error) {
+func startWithBuilder(ctx context.Context, cfg config.Config, builder func(config.Config) (*application, error)) (running *runningServer, err error) {
 	if ctx == nil {
 		return nil, errors.New("service context is required")
 	}
 	if builder == nil {
 		return nil, errors.New("application builder is required")
 	}
+	instanceLock, err := instance.Acquire(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	startupComplete := false
+	defer func() {
+		if startupComplete {
+			return
+		}
+		if closeErr := instanceLock.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("release instance lock: %w", closeErr))
+		}
+	}()
+	fileOriginToken, err := newFileOriginToken()
+	if err != nil {
+		return nil, err
+	}
+	cfg.FileOriginToken = fileOriginToken
 	application, err := builder(cfg)
 	if err != nil {
 		return nil, err
@@ -127,7 +149,8 @@ func startWithBuilder(ctx context.Context, cfg config.Config, builder func(confi
 	}
 	httpServer := &http.Server{Handler: application.Handler, ReadHeaderTimeout: 5 * time.Second}
 	serviceContext, cancelService := context.WithCancel(ctx)
-	httpDone := make(chan error, 1)
+	httpServeDone := make(chan error, 1)
+	httpShutdownDone := make(chan error, 1)
 	done := make(chan error, 1)
 	go application.worker.Run(serviceContext)
 	go consumeWorkerErrors(serviceContext, application.worker.Errors())
@@ -137,23 +160,40 @@ func startWithBuilder(ctx context.Context, cfg config.Config, builder func(confi
 			err = nil
 		}
 		cancelService()
-		httpDone <- err
+		httpServeDone <- err
 	}()
 	go func() {
 		<-serviceContext.Done()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := httpServer.Shutdown(shutdownContext); err != nil {
+		err := httpServer.Shutdown(shutdownContext)
+		if err != nil {
 			log.Printf("HTTP shutdown failed")
 		}
+		httpShutdownDone <- err
 	}()
 	go func() {
-		err := <-httpDone
+		err := <-httpServeDone
 		cancelService()
+		if shutdownErr := <-httpShutdownDone; shutdownErr != nil {
+			err = errors.Join(err, fmt.Errorf("HTTP shutdown failed: %w", shutdownErr))
+		}
 		<-application.worker.Done()
+		if closeErr := instanceLock.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("release instance lock: %w", closeErr))
+		}
 		done <- err
 	}()
-	return &runningServer{URL: fmt.Sprintf("http://%s:%d", cfg.Host, port), Done: done}, nil
+	startupComplete = true
+	return &runningServer{URL: fmt.Sprintf("http://%s:%d", cfg.Host, port), FileOriginToken: fileOriginToken, Done: done}, nil
+}
+
+func newFileOriginToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate file-origin capability: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
 func consumeWorkerErrors(ctx context.Context, errors <-chan error) {
@@ -180,6 +220,7 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("local-print-agent listening on %s", running.URL)
+	log.Printf("optional file console: web/index.html?local_print_agent_token=%s", running.FileOriginToken)
 	if err := <-running.Done; err != nil {
 		log.Fatal(err)
 	}

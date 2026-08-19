@@ -1,6 +1,6 @@
 # HTTP API v1
 
-服务只监听回环地址。以下示例假设终端输出的实际地址为 `http://127.0.0.1:17653`；若端口回退，请替换 `$base`/`$BASE`。除 `/health` 外，JSON 响应统一为 `{"data":...,"error":null}` 或 `{"data":null,"error":{"code":"...","message":"..."}}`。所有 JSON 都使用 UTF-8。
+服务只监听回环地址。以下示例假设终端输出的实际地址为 `http://127.0.0.1:17653`；若端口回退，请替换 `$base`/`$BASE`。默认 Web 控制台直接打开该地址，与 API 同源，不需要 CORS。可选 `file://` 页面必须使用本次启动在本地终端输出的 `web/index.html?local_print_agent_token=<per-launch-token>` 指令；页面会把同一能力值作为 `local_print_agent_token` 查询参数附到 health、API 和 preview 请求。只有 `Origin: null` 且能力值正确时，服务才返回 null-origin CORS；缺失、错误或空配置均不授权。能力值不会进入 Job 数据或错误响应。除 `/health` 外，JSON 响应统一为 `{"data":...,"error":null}` 或 `{"data":null,"error":{"code":"...","message":"..."}}`。所有 JSON 都使用 UTF-8。
 
 ```powershell
 $base = 'http://127.0.0.1:17653'
@@ -20,7 +20,7 @@ BASE=http://127.0.0.1:17653
 {"api_version":"v1","service":"local-print-agent","status":"ok"}
 ```
 
-**状态码**：`200` 成功；`405 METHOD_NOT_ALLOWED` 表示使用了非 GET 方法，并返回 `Allow: GET`。来自 `file://` 页面的 `OPTIONS` 预检会返回 `204`。
+**状态码**：`200` 成功；`405 METHOD_NOT_ALLOWED` 表示使用了非 GET 方法，并返回 `Allow: GET`。来自 `file://` 页面的 `OPTIONS` 预检只在携带本次启动的正确能力值时返回 `204` 和 CORS 头；缺失或错误能力值不获得 CORS。
 
 ```powershell
 Invoke-RestMethod -Method Get -Uri "$base/health"

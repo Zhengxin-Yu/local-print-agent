@@ -1,7 +1,8 @@
 (() => {
   "use strict";
   const byId = (id) => document.getElementById(id);
-  const state = { origin: "", refreshTimer: null, busy: new Set() };
+  const fileOriginToken = window.location.protocol === "file:" ? new URLSearchParams(window.location.search).get("local_print_agent_token") || "" : "";
+  const state = { origin: "", fileOriginToken, refreshTimer: null, busy: new Set() };
   const errorState = { source: "", message: "" };
   const errorBox = byId("page-error");
 
@@ -20,8 +21,13 @@
     byId("api-version").textContent = version || "—";
     try { byId("service-port").textContent = origin ? new URL(origin).port || "默认端口" : "—"; } catch (_) { byId("service-port").textContent = "—"; }
   }
+  function servicePath(path) {
+    if (!state.fileOriginToken) return path;
+    const separator = path.includes("?") ? "&" : "?";
+    return `${path}${separator}local_print_agent_token=${encodeURIComponent(state.fileOriginToken)}`;
+  }
   async function fetchJSON(path, options = {}) {
-    const response = await fetch(state.origin + path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+    const response = await fetch(state.origin + servicePath(path), { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
     let result;
     try { result = await response.json(); } catch (_) { throw new Error("服务返回了无效响应。"); }
     if (!response.ok || result.error) { throw new Error(result.error && result.error.message ? result.error.message : `请求失败（${response.status}）`); }
@@ -30,7 +36,7 @@
   async function health(origin) {
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 1000);
     try {
-      const response = await fetch(origin + "/health", { signal: controller.signal });
+      const response = await fetch(origin + servicePath("/health"), { signal: controller.signal });
       const data = await response.json();
       return response.ok && data.service === "local-print-agent" && data.api_version === "v1" && data.status === "ok";
     } catch (_) { return false; } finally { clearTimeout(timeout); }
@@ -61,7 +67,7 @@
     }
   }
   async function refreshJobs(button) { if (!state.origin) throw new Error("本地服务尚未连接"); if (button) setBusy(button, true); try { const jobs = await fetchJSON("/api/v1/print-jobs", { headers: {} }); renderJobs(jobs); clearError("refresh"); return jobs; } catch (error) { showError("refresh", `无法刷新任务：${error.message}`); error.operation = "refresh"; throw error; } finally { if (button) setBusy(button, false); } }
-  async function loadDetail(id, button) { clearError("detail"); setBusy(button, true); try { const job = await fetchJSON(`/api/v1/print-jobs/${encodeURIComponent(id)}`, { headers: {} }); const detail = byId("job-detail"); detail.replaceChildren(); const pre = document.createElement("pre"); pre.textContent = JSON.stringify(job, null, 2); detail.append(pre); if (job.pdf_path) { const link = document.createElement("a"); link.href = state.origin + `/api/v1/print-jobs/${encodeURIComponent(id)}/preview`; link.className = "preview-link"; link.target = "_blank"; link.rel = "noopener"; link.textContent = "打开 PDF 预览"; detail.append(link); } clearError("detail"); } catch (error) { showError("detail", `无法加载详情：${error.message}`); } finally { setBusy(button, false); } }
+  async function loadDetail(id, button) { clearError("detail"); setBusy(button, true); try { const job = await fetchJSON(`/api/v1/print-jobs/${encodeURIComponent(id)}`, { headers: {} }); const detail = byId("job-detail"); detail.replaceChildren(); const pre = document.createElement("pre"); pre.textContent = JSON.stringify(job, null, 2); detail.append(pre); if (job.pdf_path) { const link = document.createElement("a"); link.href = state.origin + servicePath(`/api/v1/print-jobs/${encodeURIComponent(id)}/preview`); link.className = "preview-link"; link.target = "_blank"; link.rel = "noopener"; link.textContent = "打开 PDF 预览"; detail.append(link); } clearError("detail"); } catch (error) { showError("detail", `无法加载详情：${error.message}`); } finally { setBusy(button, false); } }
   async function retryJob(id, button) { clearError("retry"); setBusy(button, true); try { await fetchJSON(`/api/v1/print-jobs/${encodeURIComponent(id)}/retry`, { method:"POST" }); await refreshJobs(); clearError("retry"); } catch (error) { if (error.operation !== "refresh") showError("retry", `重试失败：${error.message}`); } finally { setBusy(button, false); } }
   async function createJob(type, payload, button) { const printer = byId("printer-select").value; if (!printer) { showError("create", "请先选择可用打印机。"); return; } clearError("create"); setBusy(button, true); try { await fetchJSON("/api/v1/print-jobs", { method:"POST", body:JSON.stringify({ type, printer_name:printer, payload }) }); await refreshJobs(); clearError("create"); } catch (error) { if (error.operation !== "refresh") showError("create", `创建任务失败：${error.message}`); } finally { setBusy(button, false); } }
   async function loadPrinters() { const select = byId("printer-select"); try { const printers = await fetchJSON("/api/v1/printers", { headers: {} }); select.replaceChildren(); if (!printers.length) { const option = document.createElement("option"); option.value = ""; option.textContent = "没有可用打印机"; select.append(option); byId("printer-hint").textContent = "打印机列表为空，暂时不能创建任务。"; return; } for (const printer of printers) { const option = document.createElement("option"); option.value = printer.name; option.textContent = `${printer.name}${printer.is_default ? "（默认）" : ""}`; select.append(option); } clearError("printer"); } catch (error) { select.replaceChildren(); const option = document.createElement("option"); option.value = ""; option.textContent = "打印机依赖不可用"; select.append(option); byId("printer-hint").textContent = "无法读取打印机：" + error.message; showError("printer", `打印机不可用：${error.message}`); } }
