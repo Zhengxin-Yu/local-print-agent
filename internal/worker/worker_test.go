@@ -196,6 +196,32 @@ func TestWorkerRecordsRenderFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerPreservesRendererJobErrorAndNeverPrints(t *testing.T) {
+	job := queuedJob("renderer-unavailable")
+	store := newRecordingStore(job)
+	renderer := rendererFunc(func(context.Context, *jobs.Job) (string, error) {
+		return "", &jobs.JobError{Code: jobs.ErrorCode("RENDERER_NOT_FOUND"), Message: "browser unavailable"}
+	})
+	printerAdapter := printer.NewFake(nil)
+	queue := make(chan string, 1)
+	cancel := startWorker(t, store, renderer, printerAdapter, queue)
+	defer cancel()
+	queue <- job.ID
+
+	failed := waitForStatus(t, store, job.ID, jobs.StatusFailed)
+	if failed.Error == nil || failed.Error.Code != jobs.ErrorCode("RENDERER_NOT_FOUND") {
+		t.Fatalf("renderer failure = %#v, want preserved RENDERER_NOT_FOUND", failed.Error)
+	}
+	if calls := printerAdapter.Calls(); len(calls) != 0 {
+		t.Fatalf("Print calls = %#v, want none after renderer failure", calls)
+	}
+	for _, update := range store.History() {
+		if update.Status == jobs.StatusPrinting {
+			t.Fatalf("job entered printing after renderer failure: %#v", update)
+		}
+	}
+}
+
 func TestWorkerRecordsPrintCommandFailure(t *testing.T) {
 	job := queuedJob("print-failure")
 	store := newRecordingStore(job)

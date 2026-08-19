@@ -36,28 +36,31 @@ func TestFakeRendererWritesRecognizableControlledPDF(t *testing.T) {
 		t.Fatalf("fake PDF does not identify itself: %q", contents)
 	}
 	assertMinimalPDFStructure(t, contents, "job-123")
-	assertPDFInfoWhenAvailable(t, path)
 }
 
-func assertPDFInfoWhenAvailable(t *testing.T, path string) {
-	t.Helper()
-	candidates := []string{"pdfinfo"}
-	if pdftotext, err := exec.LookPath("pdftotext"); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(pdftotext), "pdfinfo.exe"))
+func TestFakeRendererPassesConfiguredPDFInfo(t *testing.T) {
+	command := strings.TrimSpace(os.Getenv("LOCAL_PRINT_AGENT_PDFINFO"))
+	if command == "" {
+		t.Skip("set LOCAL_PRINT_AGENT_PDFINFO to opt in to the external pdfinfo check")
 	}
-	seen := map[string]bool{}
-	for _, command := range candidates {
-		if seen[command] {
-			continue
-		}
-		seen[command] = true
-		if output, err := exec.Command(command, path).CombinedOutput(); err == nil {
-			return
-		} else if command != "pdfinfo" {
-			t.Fatalf("pdfinfo failed: %v\n%s", err, output)
-		}
+	renderer, err := NewFake(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Skip("no runnable pdfinfo command is available")
+	path, err := renderer.Render(context.Background(), &jobs.Job{ID: "external-pdfinfo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath(command); err != nil {
+		t.Skipf("configured pdfinfo is unavailable: %v", err)
+	}
+	if output, err := exec.Command(command, path).CombinedOutput(); err != nil {
+		lower := strings.ToLower(string(output))
+		if strings.Contains(lower, "fresh tex installation") || strings.Contains(lower, "create directory") || strings.Contains(lower, "access is denied") || strings.Contains(string(output), "拒绝访问") {
+			t.Skipf("configured pdfinfo cannot initialize in this environment: %v", err)
+		}
+		t.Fatalf("pdfinfo failed: %v\n%s", err, output)
+	}
 }
 
 func TestEscapePDFStringEscapesLiteralStringDelimiters(t *testing.T) {

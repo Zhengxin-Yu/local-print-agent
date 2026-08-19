@@ -37,6 +37,8 @@ const (
 	ErrorCodeStore               ErrorCode = "STORE_ERROR"
 	ErrorCodeContextCanceled     ErrorCode = "CONTEXT_CANCELED"
 	ErrorCodeRenderFailed        ErrorCode = "RENDER_FAILED"
+	ErrorCodeRendererNotFound    ErrorCode = "RENDERER_NOT_FOUND"
+	ErrorCodeRendererUnsupported ErrorCode = "RENDERER_VERSION_UNSUPPORTED"
 	ErrorCodePrintFailed         ErrorCode = "PRINT_COMMAND_FAILED"
 )
 

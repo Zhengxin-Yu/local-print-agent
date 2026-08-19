@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,9 +149,91 @@ func TestAPIListsPrintersAndMapsAdapterFailures(t *testing.T) {
 	})
 }
 
-func TestAPIPreviewIsRegisteredButNotImplemented(t *testing.T) {
-	response := serveAPI(NewRouter(Dependencies{}), http.MethodGet, "/api/v1/print-jobs/a/preview", "", "")
-	assertEnvelope(t, response, http.StatusNotImplemented, "PREVIEW_NOT_IMPLEMENTED")
+func TestAPIPreviewServesOnlyStoredJobPDFWithSafeHeadersAndRange(t *testing.T) {
+	root := t.TempDir()
+	id := "0123456789abcdef0123456789abcdef"
+	directory := filepath.Join(root, id)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pdfPath := filepath.Join(directory, "preview.pdf")
+	pdf := []byte("%PDF-1.7\n0123456789")
+	if err := os.WriteFile(pdfPath, pdf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, _, err := securePreviewPath(root, id, pdfPath); err != nil {
+		t.Fatalf("securePreviewPath() error = %v", err)
+	} else if !sameFilesystemPath(resolved, pdfPath) {
+		t.Fatalf("securePreviewPath() = %q, want %q", resolved, pdfPath)
+	}
+	router := NewRouter(Dependencies{Jobs: &stubJobService{getJob: &jobs.Job{ID: id, PDFPath: pdfPath}}, PreviewRoot: root})
+
+	response := serveAPI(router, http.MethodGet, "/api/v1/print-jobs/"+id+"/preview", "", "")
+	if response.Code != http.StatusOK || response.Body.String() != string(pdf) {
+		t.Fatalf("preview = %d %q, want complete PDF", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/pdf" {
+		t.Fatalf("Content-Type = %q, want application/pdf", got)
+	}
+	if got := response.Header().Get("Content-Disposition"); got != `inline; filename="preview.pdf"` {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/print-jobs/"+id+"/preview", nil)
+	request.Header.Set("Range", "bytes=9-12")
+	rangeResponse := httptest.NewRecorder()
+	router.ServeHTTP(rangeResponse, request)
+	if rangeResponse.Code != http.StatusPartialContent || rangeResponse.Body.String() != "0123" {
+		t.Fatalf("range preview = %d %q, want 206 and selected bytes", rangeResponse.Code, rangeResponse.Body.String())
+	}
+}
+
+func TestAPIPreviewMapsNotReadyNotFoundAndTamperedPaths(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tests := []struct {
+		name       string
+		service    *stubJobService
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "not ready", service: &stubJobService{getJob: &jobs.Job{ID: id}}, wantStatus: http.StatusConflict, wantCode: "PREVIEW_NOT_READY"},
+		{name: "job not found", service: &stubJobService{getErr: store.ErrNotFound}, wantStatus: http.StatusNotFound, wantCode: "NOT_FOUND"},
+		{name: "outside root", service: &stubJobService{getJob: &jobs.Job{ID: id, PDFPath: filepath.Join(t.TempDir(), "preview.pdf")}}, wantStatus: http.StatusInternalServerError, wantCode: "INTERNAL_ERROR"},
+		{name: "wrong filename", service: &stubJobService{getJob: &jobs.Job{ID: id, PDFPath: filepath.Join(root, id, "other.pdf")}}, wantStatus: http.StatusInternalServerError, wantCode: "INTERNAL_ERROR"},
+		{name: "mismatched job ID", service: &stubJobService{getJob: &jobs.Job{ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PDFPath: filepath.Join(root, id, "preview.pdf")}}, wantStatus: http.StatusInternalServerError, wantCode: "INTERNAL_ERROR"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := serveAPI(NewRouter(Dependencies{Jobs: test.service, PreviewRoot: root}), http.MethodGet, "/api/v1/print-jobs/"+id+"/preview", "", "")
+			assertEnvelope(t, response, test.wantStatus, test.wantCode)
+			if strings.Contains(response.Body.String(), root) {
+				t.Fatalf("preview error leaked root path: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAPIPreviewRejectsSymlinkEscapeWhenSupported(t *testing.T) {
+	root := t.TempDir()
+	id := "cccccccccccccccccccccccccccccccc"
+	directory := filepath.Join(root, id)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.pdf")
+	if err := os.WriteFile(outside, []byte("%PDF-1.7\noutside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "preview.pdf")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	response := serveAPI(NewRouter(Dependencies{Jobs: &stubJobService{getJob: &jobs.Job{ID: id, PDFPath: link}}, PreviewRoot: root}), http.MethodGet, "/api/v1/print-jobs/"+id+"/preview", "", "")
+	assertEnvelope(t, response, http.StatusInternalServerError, "INTERNAL_ERROR")
 }
 
 func TestAPIMethodNotAllowedHasEnvelopeAndAllowHeader(t *testing.T) {
@@ -161,6 +245,7 @@ func TestAPIMethodNotAllowedHasEnvelopeAndAllowHeader(t *testing.T) {
 		{method: http.MethodDelete, path: "/api/v1/printers", allow: http.MethodGet},
 		{method: http.MethodPut, path: "/api/v1/print-jobs", allow: "GET, POST"},
 		{method: http.MethodGet, path: "/api/v1/print-jobs/a/retry", allow: http.MethodPost},
+		{method: http.MethodHead, path: "/api/v1/print-jobs/a/preview", allow: http.MethodGet},
 	}
 	for _, test := range tests {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {

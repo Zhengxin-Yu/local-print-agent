@@ -89,7 +89,12 @@ func (w *Worker) process(ctx context.Context, id string) {
 	}
 	pdfPath, err := w.renderer.Render(ctx, job)
 	if err != nil {
-		w.fail(ctx, job, jobs.ErrorCodeRenderFailed, err)
+		code := jobs.ErrorCodeRenderFailed
+		var jobError *jobs.JobError
+		if errors.As(err, &jobError) {
+			code = jobError.Code
+		}
+		w.fail(ctx, job, code, err)
 		return
 	}
 	job.PDFPath = pdfPath

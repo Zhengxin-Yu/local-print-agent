@@ -47,7 +47,6 @@ func TestAppJavaScriptKeepsErrorsScopedToTheirOperation(t *testing.T) {
 		"const errorState = { source: \"\", message: \"\" }",
 		"function showError(source, message)",
 		"function clearError(source)",
-		"showError(\"preview\"",
 		"showError(\"refresh\"",
 		"clearError(\"refresh\")",
 		"throw error;",
@@ -64,5 +63,27 @@ func TestAppJavaScriptKeepsErrorsScopedToTheirOperation(t *testing.T) {
 	refresh := source[start : start+end]
 	if strings.Contains(refresh, "clearError()") {
 		t.Fatal("refreshJobs clears every operation error instead of only refresh errors")
+	}
+}
+
+func TestAppJavaScriptOpensReadyPDFPreviewDirectly(t *testing.T) {
+	contents, err := fs.ReadFile(Assets, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(contents)
+	start := strings.Index(source, "async function loadDetail")
+	end := strings.Index(source[start:], "async function retryJob")
+	if start < 0 || end < 0 {
+		t.Fatal("cannot locate loadDetail function")
+	}
+	loadDetail := source[start : start+end]
+	for _, required := range []string{`link.target = "_blank"`, `link.rel = "noopener"`, `link.textContent = "打开 PDF 预览"`} {
+		if !strings.Contains(loadDetail, required) {
+			t.Fatalf("loadDetail lacks direct PDF preview behavior %q", required)
+		}
+	}
+	if strings.Contains(loadDetail, "event.preventDefault") || strings.Contains(loadDetail, "await fetchJSON(`/api/v1/print-jobs/${encodeURIComponent(id)}/preview`") {
+		t.Fatal("loadDetail intercepts the PDF link as a JSON API request")
 	}
 }

@@ -41,6 +41,23 @@ func buildApplication(cfg config.Config) (*application, error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
+	renderer, err := render.NewPDFRenderer(cfg.DataDir, "")
+	if err != nil {
+		return nil, err
+	}
+	return buildApplicationWithRenderer(cfg, renderer)
+}
+
+func buildApplicationWithRenderer(cfg config.Config, renderer render.Renderer) (*application, error) {
+	if cfg.DataDir == "" {
+		return nil, errors.New("data directory is required")
+	}
+	if renderer == nil {
+		return nil, errors.New("renderer is required")
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create data directory: %w", err)
+	}
 	jobStore, err := store.NewJSONStore(filepath.Join(cfg.DataDir, "jobs.json"))
 	if err != nil {
 		return nil, err
@@ -48,23 +65,26 @@ func buildApplication(cfg config.Config) (*application, error) {
 	if err := jobStore.RecoverInterrupted(context.Background()); err != nil {
 		return nil, fmt.Errorf("recover interrupted jobs: %w", err)
 	}
-	renderer, err := render.NewFake(filepath.Join(cfg.DataDir, "mock-pdfs"))
-	if err != nil {
-		return nil, err
-	}
 	printers := printer.NewFake([]printer.Info{{Name: fakePrinterName, IsDefault: true}})
 	service, jobWorker := worker.NewPipeline(jobStore, renderer, printers)
 	if _, err := service.ResumeQueued(context.Background()); err != nil {
 		return nil, fmt.Errorf("restore queued jobs: %w", err)
 	}
-	return &application{Handler: httpapi.NewRouter(httpapi.Dependencies{Jobs: service, Printers: printers, Web: web.Assets}), worker: jobWorker}, nil
+	return &application{Handler: httpapi.NewRouter(httpapi.Dependencies{Jobs: service, Printers: printers, Web: web.Assets, PreviewRoot: filepath.Join(cfg.DataDir, "jobs")}), worker: jobWorker}, nil
 }
 
 func start(ctx context.Context, cfg config.Config) (*runningServer, error) {
+	return startWithBuilder(ctx, cfg, buildApplication)
+}
+
+func startWithBuilder(ctx context.Context, cfg config.Config, builder func(config.Config) (*application, error)) (*runningServer, error) {
 	if ctx == nil {
 		return nil, errors.New("service context is required")
 	}
-	application, err := buildApplication(cfg)
+	if builder == nil {
+		return nil, errors.New("application builder is required")
+	}
+	application, err := builder(cfg)
 	if err != nil {
 		return nil, err
 	}

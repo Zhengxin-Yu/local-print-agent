@@ -108,6 +108,20 @@ func TestSourceRenderDeclaresMinimumChromeVersion(t *testing.T) {
 	}
 }
 
+func TestSourceFixtureExercisesMultipageChineseLineNumberContract(t *testing.T) {
+	job := loadRenderJob(t, "source_cpp.json")
+	var payload jobs.SourceCodePayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(payload.SourceCode, "\n") + 1; lines < 120 {
+		t.Fatalf("source_cpp.json lines = %d, want at least 120 for pagination", lines)
+	}
+	if !strings.Contains(payload.SourceCode, "中文注释") {
+		t.Fatal("source_cpp.json lacks the Chinese comment used by the PDF demo")
+	}
+}
+
 func TestRenderSourceHTMLEscapesLongMetadataWithoutChangingHeaderHeightContract(t *testing.T) {
 	longMetadata := "BEGIN-<script>alert(1)</script>-END-" + strings.Repeat("超长元数据", 1000)
 	payload, err := json.Marshal(jobs.SourceCodePayload{

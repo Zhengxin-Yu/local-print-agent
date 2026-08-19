@@ -29,6 +29,8 @@ type Dependencies struct {
 	Jobs     JobService
 	Printers printer.Adapter
 	Web      fs.FS
+	// PreviewRoot is the data/jobs directory controlled by PDFRenderer.
+	PreviewRoot string
 }
 
 type router struct{ dependencies Dependencies }
@@ -87,7 +89,7 @@ func (r router) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 				methodNotAllowed(w, http.MethodGet)
 				return
 			}
-			previewNotImplemented(w)
+			r.previewJob(w, request, jobID)
 		case "retry":
 			if request.Method != http.MethodPost {
 				methodNotAllowed(w, http.MethodPost)
