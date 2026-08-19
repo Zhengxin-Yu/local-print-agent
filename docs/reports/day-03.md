@@ -13,7 +13,7 @@
 | `created_at` / `updated_at` | Service/状态迁移 | 排序与审计 | RFC3339 时间 |
 | `started_at` / `finished_at` | Worker 状态迁移 | 本次尝试的运行区间 | RFC3339 时间 |
 | `attempts` | 进入 `rendering` 时递增 | 重试计数 | `1` |
-| `pdf_path` | Renderer 返回 | 传给打印适配器的暂存 PDF | `C:\\Temp\\job.pdf` |
+| `pdf_path` | Renderer 返回 | 传给打印适配器的暂存 PDF | `data/jobs/<jobID>/preview.pdf` |
 
 ## 接口
 

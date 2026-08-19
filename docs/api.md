@@ -205,17 +205,20 @@ curl --fail-with-body "$BASE/api/v1/print-jobs"
 **状态码**：`200` 成功；`404 NOT_FOUND` 表示任务不存在；`503 DEPENDENCY_UNAVAILABLE` 表示 Job Service 未装配；`500 INTERNAL_ERROR` 表示存储/内部错误；`405 METHOD_NOT_ALLOWED` 表示方法错误。
 
 ```powershell
+$base = 'http://127.0.0.1:17653'
+$jobID = '0123456789abcdef0123456789abcdef'
 Invoke-RestMethod -Method Get -Uri "$base/api/v1/print-jobs/$jobID"
 ```
 
 ```bash
+BASE=http://127.0.0.1:17653
 JOB_ID=0123456789abcdef0123456789abcdef
 curl --fail-with-body "$BASE/api/v1/print-jobs/$JOB_ID"
 ```
 
 ## 6. 获取 PDF 预览
 
-**请求**：`GET /api/v1/print-jobs/{jobID}/preview`，无请求体。可发送标准 `Range: bytes=...` 请求。
+**请求**：`GET /api/v1/print-jobs/{jobID}/preview`，无请求体。该示例需要一个已经生成可读取 PDF 的 Job；任务尚未准备好时会返回 `PREVIEW_NOT_READY`。可发送标准 `Range: bytes=...` 请求。
 
 **成功响应（200）**：响应体为 PDF 字节而非 JSON，关键响应头如下：
 
@@ -231,16 +234,20 @@ X-Content-Type-Options: nosniff
 **状态码**：`200` 完整 PDF；`206` 部分 PDF；`404 NOT_FOUND` 表示任务不存在；`409 PREVIEW_NOT_READY` 表示任务尚无可读取 PDF；`416` 表示 Range 不可满足；`503 DEPENDENCY_UNAVAILABLE` 表示 Job Service 未装配；`500 INTERNAL_ERROR` 表示存储路径不符合安全边界或读取失败；`405 METHOD_NOT_ALLOWED` 表示方法错误。
 
 ```powershell
+$base = 'http://127.0.0.1:17653'
+$jobID = '0123456789abcdef0123456789abcdef' # 替换为已有 ready PDF 的 Job ID
 Invoke-WebRequest -Method Get -Uri "$base/api/v1/print-jobs/$jobID/preview" -OutFile '.\preview.pdf'
 ```
 
 ```bash
+BASE=http://127.0.0.1:17653
+JOB_ID=0123456789abcdef0123456789abcdef # 替换为已有 ready PDF 的 Job ID
 curl --fail-with-body "$BASE/api/v1/print-jobs/$JOB_ID/preview" --output preview.pdf
 ```
 
 ## 7. 重试失败任务
 
-**请求**：`POST /api/v1/print-jobs/{jobID}/retry`，不需要请求体。只允许当前状态为 `failed` 的任务；调用成功后清除旧错误、`started_at`、`finished_at`，保持已有 `attempts`，状态回到 `queued`。
+**请求**：`POST /api/v1/print-jobs/{jobID}/retry`，不需要请求体。该示例需要一个当前状态为 `failed` 的 Job；其他状态会返回 `RETRY_NOT_ALLOWED`。调用成功后清除旧错误、`started_at`、`finished_at`，保持已有 `attempts`，状态回到 `queued`。
 
 **成功响应（200）**：异步 Worker 可能很快开始下一次尝试，因此客户端应继续查询详情，而不是假设读取到的状态一定仍为 `queued`。
 
@@ -263,11 +270,15 @@ curl --fail-with-body "$BASE/api/v1/print-jobs/$JOB_ID/preview" --output preview
 **状态码**：`200` 已重新排队；`404 NOT_FOUND` 表示任务不存在；`409 RETRY_NOT_ALLOWED` 表示任务不是 `failed`；`503 QUEUE_FULL` 或 `QUEUE_DELIVERY_FAILED` 表示队列不可用；`503 DEPENDENCY_UNAVAILABLE` 表示 Job Service 未装配；`500 INTERNAL_ERROR` 表示存储/内部错误；`405 METHOD_NOT_ALLOWED` 表示方法错误。
 
 ```powershell
+$base = 'http://127.0.0.1:17653'
+$jobID = '0123456789abcdef0123456789abcdef' # 替换为 failed Job ID
 $retried = Invoke-RestMethod -Method Post -Uri "$base/api/v1/print-jobs/$jobID/retry"
 $retried.data
 ```
 
 ```bash
+BASE=http://127.0.0.1:17653
+JOB_ID=0123456789abcdef0123456789abcdef # 替换为 failed Job ID
 curl --fail-with-body -X POST "$BASE/api/v1/print-jobs/$JOB_ID/retry"
 ```
 

@@ -2,7 +2,7 @@
 
 ## 1. 最终回归摘要和自动测试输出
 
-验证日期：2026-08-19；主机：Windows amd64；Go：`go1.25.4 windows/amd64`；module 指定 `go 1.23.0`。本轮所有 Go 命令将 `GOCACHE` 显式指向仓库外目录，默认只使用 Fake Printer 或受控 command runner，没有向系统或实体打印队列提交任务。
+验证日期：2026-08-19；主机：Windows amd64；Go：`go1.25.4 windows/amd64`；module 指定 `go 1.23.0`。本轮所有 Go 命令将 `GOCACHE` 显式指向已忽略的项目相对目录 `.cache/`，默认只使用 Fake Printer 或受控 command runner，没有向系统或实体打印队列提交任务。
 
 | 命令 | 结果 | 摘要 |
 | --- | --- | --- |
@@ -60,14 +60,14 @@
 | 固定顺序 8 分钟演示脚本 | 完成 | `docs/demo-script.md`；8 段时间点从 00:00 连续至 08:00。 |
 | Windows/Linux 脚本显式 demo/platform | 完成 | `scripts/run-windows.ps1`、`scripts/run-linux.sh`；AST/`bash -n`、非法参数和依赖前置检查。 |
 | Linux 脚本 LF 交付 | 完成 | `.gitattributes` 固定 `*.sh text eol=lf`，避免 Windows 打包后 shebang 变为 `bash\r`。 |
-| 干净副本不带版本库/缓存/数据 | 完成 | 最终副本 `C:\Users\32660\workspace\2026_2+夏\local-print-agent-task14-clean-20260819-05`，81 个文件；复制器显式拒绝 `.git/.worktrees/.superpowers/.tmp/data`。该目录是本机临时验证物，不提交。 |
-| 只按 README 启动至 health/打印机/创建/预览 | 部分完成 | 第一次发现默认 Go cache 权限问题并修文档；第二次使用 README 的显式 cache 后进入 Chrome 探测，但受限桌面把 Chrome 151 启动/版本探测映射为 `Chromium 131 or newer is required`。申请沙箱外复验因工具额度被拒；因此 health、创建和当日 preview 未取得，不能写“完成”。 |
+| 干净副本不带版本库/缓存/数据 | 完成 | 最终副本 `../local-print-agent-task14-clean-20260819-03`；复制器显式拒绝 `.git/.worktrees/.superpowers/.tmp/data`。该目录是本机临时验证物，不提交。 |
+| 只按 README 启动至 health/打印机/创建/预览 | 完成 | 服务监听 `http://127.0.0.1:17653`；`/health` 返回 `status=ok`、API `v1`；发现 Mock Printer；任务 `cb952a0b7ab5df015b599b3cbf3c6484` 最终为 `succeeded`；preview 返回 HTTP 200、`application/pdf`、36,972 bytes；停止后端口释放。全程未访问系统打印队列。 |
 | 真人同学只看 README 启动 | 未做 | 无真人参与；见第 3 节待执行清单。 |
 | Windows 系统队列录屏 | 未做 | 无 SumatraPDF/已确认自动保存虚拟队列；未向系统队列提交。 |
 | Linux/CUPS 录屏和 runtime 测试 | 未做 | 本机无 Linux runtime/CUPS；已有交叉编译不能替代。 |
 | 自动回归/race/vet/mod/diff | 完成 | 本报告第 1 节的本轮命令输出。 |
 
-Chrome 文件属性显示 `151.0.7922.138`。本轮公开启动错误来自受限环境下版本命令无可解析输出、后备 headless 启动失败；Day 5 已保存的真实 Chrome PDF 和截图仍是历史证据，本报告不把它改写为“Day 8 干净启动成功”。
+该干净副本验证只证明 README demo 主路径可复现，不替代真人同学启动、Windows 系统队列、Linux/CUPS runtime 或双平台录屏证据；这些外部人工事项仍保持未完成。
 
 ## 5. Windows、Linux 录屏文件名和关键时间点
 
@@ -85,21 +85,20 @@ Chrome 文件属性显示 `151.0.7922.138`。本轮公开启动错误来自受�
 Windows demo：
 
 ```powershell
-$goCache = Join-Path $env:TEMP 'local-print-agent-gocache'
-.\scripts\run-windows.ps1 -Mode demo -BrowserPath 'C:\Program Files\Google\Chrome\Application\chrome.exe' -GoCachePath $goCache
+.\scripts\run-windows.ps1 -Mode demo -BrowserPath '.\tools\chrome\chrome.exe' -GoCachePath '.cache\go-build'
 ```
 
 Linux demo：
 
 ```bash
-./scripts/run-linux.sh --mode demo --browser-path /usr/bin/google-chrome --go-cache /tmp/local-print-agent-gocache
+./scripts/run-linux.sh --mode demo --browser-path ./tools/chrome/chrome --go-cache .cache/go-build
 ```
 
 平台模式仅在安全队列确认后执行，完整参数见 README。回归：
 
 ```powershell
 $env:GOTOOLCHAIN = 'local'
-$env:GOCACHE = Join-Path $env:TEMP 'local-print-agent-test-gocache'
+$env:GOCACHE = '.cache\go-test'
 go test ./... -count=1 -v
 go test -race ./... -count=1
 go vet ./...
@@ -111,7 +110,7 @@ if (Test-Path -LiteralPath '.git') { git diff --check }
 
 演示操作和逐分钟讲解见 `docs/demo-script.md`；API 命令见 `docs/api.md`。
 
-## 7. 最终目录树和 commit 列表
+## 7. 最终目录树和关键提交摘要
 
 交付目录（运行时 `data/`、Go cache、`.git/` 和 `.superpowers/` 不在交付树中）：
 
@@ -158,6 +157,6 @@ Day 8 文档与脚本属于本次 `docs: finalize reproducible setup and demonst
 - 真人同学仅看 README 的原始记录（当前待补）；
 - Windows/Linux 安全虚拟队列录屏与关键时间点（当前待补）；
 - Linux runtime/CUPS request id 与队列截图（当前待补）；
-- 完整 commit 列表、最终目录树和未完成边界说明。
+- 关键提交摘要、最终目录树和未完成边界说明。
 
 若人工材料未能在提交截止前补齐，最终报告必须继续标注未完成，不能以 Fake Printer、受控 runner、交叉编译、历史截图或代理审查替代。

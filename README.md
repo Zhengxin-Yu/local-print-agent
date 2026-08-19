@@ -29,7 +29,7 @@ Web、API、Worker 和适配器运行在同一进程。任务状态为 `queued �
 ## 环境要求
 
 - Go 1.23 或更新版本；`go` 必须在 `PATH` 中。
-- Chrome 或 Chromium 131+；推荐把可执行文件绝对路径显式传给启动脚本。
+- Chrome 或 Chromium 131+；推荐把可执行文件放在仓库根目录的 `tools/` 下，并将其项目相对路径显式传给启动脚本。
 - 可用端口：回环地址 `127.0.0.1:17653` 至 `17660` 中至少一个未被占用。
 - Windows `platform` 模式：SumatraPDF 可执行文件，以及当前账户可枚举的 Windows 打印队列。
 - Linux `platform` 模式：CUPS client，必须提供 `lp` 和 `lpstat`；还需要预先配置好的打印队列。
@@ -46,8 +46,7 @@ Web、API、Worker 和适配器运行在同一进程。任务状态为 `queued �
 3. 先用不访问系统打印队列的 demo 模式验收：
 
    ```powershell
-   $goCache = Join-Path $env:TEMP 'local-print-agent-gocache'
-   .\scripts\run-windows.ps1 -Mode demo -BrowserPath 'C:\Program Files\Google\Chrome\Application\chrome.exe' -GoCachePath $goCache
+   .\scripts\run-windows.ps1 -Mode demo -BrowserPath '.\tools\chrome\chrome.exe' -GoCachePath '.cache\go-build'
    ```
 
 4. 终端会输出实际 URL，例如 `http://127.0.0.1:17653`。在浏览器打开它；如果 17653 被占用，以终端实际输出为准。
@@ -58,9 +57,9 @@ Web、API、Worker 和适配器运行在同一进程。任务状态为 `queued �
 ```powershell
 .\scripts\run-windows.ps1 `
   -Mode platform `
-  -BrowserPath 'C:\Program Files\Google\Chrome\Application\chrome.exe' `
-  -SumatraPath 'C:\Tools\SumatraPDF\SumatraPDF.exe' `
-  -GoCachePath (Join-Path $env:TEMP 'local-print-agent-gocache')
+  -BrowserPath '.\tools\chrome\chrome.exe' `
+  -SumatraPath '.\tools\sumatra\SumatraPDF.exe' `
+  -GoCachePath '.cache\go-build'
 ```
 
 平台模式不会自动退回 Mock Printer。SumatraPDF 路径缺失或不可用时，脚本会在启动前失败；打印机枚举或命令失败会以稳定错误写入任务。
@@ -72,10 +71,10 @@ Web、API、Worker 和适配器运行在同一进程。任务状态为 `queued �
 
    ```bash
    chmod +x ./scripts/run-linux.sh
-   ./scripts/run-linux.sh --mode demo --browser-path /usr/bin/google-chrome --go-cache /tmp/local-print-agent-gocache
+   ./scripts/run-linux.sh --mode demo --browser-path ./tools/chrome/chrome --go-cache .cache/go-build
    ```
 
-   Chromium 的常见路径也可以是 `/usr/bin/chromium` 或 `/usr/bin/chromium-browser`，请使用本机真实路径。
+   若浏览器未放在 `tools/` 下，可省略 `--browser-path` 让脚本自动发现系统浏览器；显式提供时请使用仓库根目录相对路径。
 3. 打开终端输出的 `http://127.0.0.1:<实际端口>`，按 `Ctrl+C` 停止。
 
 仅在已经检查 CUPS 队列且确认目标不会误出纸时使用平台模式：
@@ -83,7 +82,7 @@ Web、API、Worker 和适配器运行在同一进程。任务状态为 `queued �
 ```bash
 command -v lp lpstat
 lpstat -p
-./scripts/run-linux.sh --mode platform --browser-path /usr/bin/google-chrome --go-cache /tmp/local-print-agent-gocache
+./scripts/run-linux.sh --mode platform --browser-path ./tools/chrome/chrome --go-cache .cache/go-build
 ```
 
 脚本会检查 `lp`、`lpstat`，但不会安装 CUPS、创建队列或修改默认打印机。
@@ -93,9 +92,9 @@ lpstat -p
 | 参数/环境变量 | 值 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | Windows `-Mode` / Linux `--mode` / `LOCAL_PRINT_AGENT_PRINTER_MODE` | `demo`、`platform` | `demo` | `demo` 永不进入系统队列；`platform` 显式使用当前系统适配器。命令行参数优先于环境变量。 |
-| Windows `-BrowserPath` / Linux `--browser-path` / `LOCAL_PRINT_AGENT_BROWSER_PATH` | 浏览器绝对路径 | 自动发现 | 显式路径必须是已有普通文件；浏览器版本须为 131+。 |
-| Windows `-SumatraPath` / `LOCAL_PRINT_AGENT_SUMATRA_PATH` | SumatraPDF 绝对路径 | 无 | 仅 Windows `platform` 模式必需。 |
-| Windows `-GoCachePath` / Linux `--go-cache` / `GOCACHE` | 可写目录 | Go 默认缓存 | 受限账户无法写默认缓存时显式指向临时目录；不要放入交付包。 |
+| Windows `-BrowserPath` / Linux `--browser-path` / `LOCAL_PRINT_AGENT_BROWSER_PATH` | 浏览器项目相对路径 | 自动发现 | 显式路径必须是已有普通文件；浏览器版本须为 131+，建议放在 `tools/` 下。 |
+| Windows `-SumatraPath` / `LOCAL_PRINT_AGENT_SUMATRA_PATH` | SumatraPDF 项目相对路径 | 无 | 仅 Windows `platform` 模式必需，建议放在 `tools/` 下。 |
+| Windows `-GoCachePath` / Linux `--go-cache` / `GOCACHE` | 可写项目相对目录 | Go 默认缓存 | 受限账户无法写默认缓存时使用 `.cache/`；该目录已被 Git 忽略，不加入交付包。 |
 
 服务固定监听 `127.0.0.1`，依次尝试端口 17653–17660；运行数据固定写入仓库根目录的 `data/`。当前没有修改主机、端口或数据目录的 CLI 参数。`data/` 已被 Git 忽略，不应加入交付包。
 
@@ -117,7 +116,7 @@ lpstat -p
 
 ```powershell
 $env:GOTOOLCHAIN = 'local'
-$env:GOCACHE = Join-Path $env:TEMP 'local-print-agent-test-gocache'
+$env:GOCACHE = '.cache\go-test'
 go test ./... -count=1 -v
 go test -race ./... -count=1
 go vet ./...
@@ -129,7 +128,7 @@ Linux Bash 中对应写法：
 
 ```bash
 export GOTOOLCHAIN=local
-export GOCACHE=/tmp/local-print-agent-test-gocache
+export GOCACHE=.cache/go-test
 go test ./... -count=1 -v
 go test -race ./... -count=1
 go vet ./...
@@ -143,7 +142,7 @@ if [[ -e .git ]]; then git diff --check; fi
 
 | 现象/错误码 | 原因与处理 |
 | --- | --- |
-| `RENDERER_NOT_FOUND` | Chrome/Chromium 路径不存在。给脚本传入正确绝对路径。 |
+| `RENDERER_NOT_FOUND` | Chrome/Chromium 路径不存在。给脚本传入仓库根目录下的正确相对路径。 |
 | `RENDERER_VERSION_UNSUPPORTED` | 浏览器低于 131 或版本无法识别。升级浏览器后重启。 |
 | `unsupported printer mode` / 脚本 mode 错误 | 只允许 `demo` 或 `platform`。 |
 | Windows 提示需要 SumatraPDF | `platform` 模式必须传 `-SumatraPath` 或设置对应环境变量。 |

@@ -19,7 +19,7 @@ go mod verify
 git diff --check
 ```
 
-受限环境如果不允许写入默认 Go build cache，可将 `GOCACHE` 指向仓库外的临时目录或当前可写工作目录，测试后删除该缓存。`web` 包在安装 Node.js 时会真实执行 `app.js` 的发现、列表渲染、文本安全和定时器清理行为；没有 Node.js 时该增强用例跳过，便携的 Go 静态安全契约仍会执行。
+受限环境如果不允许写入默认 Go build cache，可将 `GOCACHE` 指向已忽略的项目相对目录 `.cache/go-test`，测试后删除该缓存。`web` 包在安装 Node.js 时会真实执行 `app.js` 的发现、列表渲染、文本安全和定时器清理行为；没有 Node.js 时该增强用例跳过，便携的 Go 静态安全契约仍会执行。
 
 ## 失败注入与边界内容
 
@@ -39,8 +39,8 @@ git diff --check
 ## 真实 Chrome PDF 回归
 
 ```powershell
-$env:LOCAL_PRINT_AGENT_CHROME_E2E = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-$env:LOCAL_PRINT_AGENT_PDFTOPPM_E2E = "<pdftoppm executable>"
+$env:LOCAL_PRINT_AGENT_CHROME_E2E = '.\tools\chrome\chrome.exe'
+$env:LOCAL_PRINT_AGENT_PDFTOPPM_E2E = '.\tools\poppler\pdftoppm.exe'
 go test ./internal/render -run '^TestPDFRendererChromeIntegration$' -count=1 -v
 go test ./cmd/local-print-agent -run '^TestRealServiceRendersBothJobsServesPreviewAndCleansUp$' -count=1 -v
 ```
