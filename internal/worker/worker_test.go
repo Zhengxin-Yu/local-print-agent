@@ -296,6 +296,23 @@ func TestWorkerRecordsPrintCommandFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerPreservesStablePrinterAdapterError(t *testing.T) {
+	job := queuedJob("missing-printer")
+	store := newRecordingStore(job)
+	pdf := temporaryPDF(t, "missing-printer")
+	printerAdapter := printer.NewFake(nil)
+	printerAdapter.SetPrintError(jobs.NewJobError(jobs.ErrorCodePrinterNotFound, "selected printer is unavailable", errors.New("sensitive OS detail")))
+	queue := make(chan string, 1)
+	cancel := startWorker(t, store, rendererFunc(func(context.Context, *jobs.Job) (string, error) { return pdf, nil }), printerAdapter, queue)
+	defer cancel()
+	queue <- job.ID
+
+	failed := waitForStatus(t, store, job.ID, jobs.StatusFailed)
+	if failed.Error == nil || failed.Error.Code != jobs.ErrorCodePrinterNotFound || failed.Error.Message != "selected printer is unavailable" {
+		t.Fatalf("print failure job = %#v, want stable adapter error", failed)
+	}
+}
+
 func TestWorkerSkipsNonQueuedJob(t *testing.T) {
 	job := queuedJob("already-finished")
 	job.Status = jobs.StatusSucceeded

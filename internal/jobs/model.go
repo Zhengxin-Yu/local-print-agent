@@ -39,6 +39,7 @@ const (
 	ErrorCodeRenderFailed        ErrorCode = "RENDER_FAILED"
 	ErrorCodeRendererNotFound    ErrorCode = "RENDERER_NOT_FOUND"
 	ErrorCodeRendererUnsupported ErrorCode = "RENDERER_VERSION_UNSUPPORTED"
+	ErrorCodePrinterNotFound     ErrorCode = "PRINTER_NOT_FOUND"
 	ErrorCodePrintFailed         ErrorCode = "PRINT_COMMAND_FAILED"
 )
 

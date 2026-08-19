@@ -138,8 +138,15 @@ func (w *Worker) process(ctx context.Context, id string) {
 		return
 	}
 	if err := w.printer.Print(ctx, job.PrinterName, job.PDFPath); err != nil {
+		code := jobs.ErrorCodePrintFailed
+		message := "Printing failed"
+		var jobError *jobs.JobError
+		if errors.As(err, &jobError) {
+			code = jobError.Code
+			message = jobError.Message
+		}
 		w.publish(err)
-		w.fail(ctx, job, jobs.ErrorCodePrintFailed, "Printing failed")
+		w.fail(ctx, job, code, message)
 		return
 	}
 	if err := jobs.Transition(job, jobs.StatusSucceeded, time.Now().UTC()); err != nil {

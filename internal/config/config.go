@@ -1,18 +1,25 @@
 package config
 
+import (
+	"os"
+	"strings"
+)
+
 type Config struct {
-	Host      string
-	FirstPort int
-	LastPort  int
-	DataDir   string
+	Host           string
+	FirstPort      int
+	LastPort       int
+	DataDir        string
+	SumatraPDFPath string
 }
 
 func Default() Config {
 	return Config{
-		Host:      "127.0.0.1",
-		FirstPort: 17653,
-		LastPort:  17660,
-		DataDir:   "data",
+		Host:           "127.0.0.1",
+		FirstPort:      17653,
+		LastPort:       17660,
+		DataDir:        "data",
+		SumatraPDFPath: strings.TrimSpace(os.Getenv("LOCAL_PRINT_AGENT_SUMATRA_PATH")),
 	}
 }
 

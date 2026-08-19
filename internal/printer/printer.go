@@ -9,6 +9,13 @@ type Info struct {
 	IsDefault bool
 }
 
+// PlatformConfig contains the paths shared by platform printer constructors.
+// Platform-specific implementations consume only the fields they support.
+type PlatformConfig struct {
+	DataDir        string
+	SumatraPDFPath string
+}
+
 // Adapter submits an already-rendered PDF to an operating-system print queue.
 // A nil error means the OS accepted the command; it never claims a physical
 // page has left the printer.
