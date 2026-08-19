@@ -84,12 +84,19 @@ func (fn rendererFunc) Render(ctx context.Context, job *jobs.Job) (string, error
 	return fn(ctx, job)
 }
 
-type rejectingUpdateStore struct{ job *jobs.Job }
+type rejectingUpdateStore struct {
+	job     *jobs.Job
+	entered chan struct{}
+}
 
 func (s rejectingUpdateStore) Get(context.Context, string) (*jobs.Job, error) {
 	return copyJob(s.job), nil
 }
-func (rejectingUpdateStore) Update(context.Context, *jobs.Job) error {
+func (s rejectingUpdateStore) Update(context.Context, *jobs.Job) error {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
 	return errors.New("disk unavailable")
 }
 
@@ -212,10 +219,9 @@ func TestWorkerSkipsNonQueuedJob(t *testing.T) {
 	job.Status = jobs.StatusSucceeded
 	store := newRecordingStore(job)
 	queue := make(chan string, 1)
-	cancel := startWorker(t, store, rendererFunc(func(context.Context, *jobs.Job) (string, error) { return "", fmt.Errorf("must not render") }), printer.NewFake(nil), queue)
-	defer cancel()
 	queue <- job.ID
-	time.Sleep(50 * time.Millisecond)
+	close(queue)
+	worker.New(store, rendererFunc(func(context.Context, *jobs.Job) (string, error) { return "", fmt.Errorf("must not render") }), printer.NewFake(nil), queue).Run(context.Background())
 	if got := store.Job(job.ID); got.Status != jobs.StatusSucceeded {
 		t.Fatalf("non-queued job changed to %#v", got)
 	}
@@ -254,10 +260,27 @@ func TestWorkerDoesNotRenderAfterStateUpdateError(t *testing.T) {
 	queue := make(chan string, 1)
 	queue <- "cannot-update"
 	close(queue)
-	worker.New(rejectingUpdateStore{job: queuedJob("cannot-update")}, rendererFunc(func(context.Context, *jobs.Job) (string, error) {
-		called = true
-		return "", nil
-	}), printer.NewFake(nil), queue).Run(context.Background())
+	entered := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.New(rejectingUpdateStore{job: queuedJob("cannot-update"), entered: entered}, rendererFunc(func(context.Context, *jobs.Job) (string, error) {
+			called = true
+			return "", nil
+		}), printer.NewFake(nil), queue).Run(ctx)
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Update() was not attempted")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Worker.Run() did not stop after cancellation")
+	}
 	if called {
 		t.Fatal("Worker rendered despite failing to persist rendering state")
 	}

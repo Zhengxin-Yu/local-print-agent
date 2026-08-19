@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -28,15 +29,20 @@ const (
 type ErrorCode string
 
 const (
-	ErrorCodeInvalidTransition ErrorCode = "INVALID_TRANSITION"
-	ErrorCodeInvalidRequest    ErrorCode = "INVALID_REQUEST"
-	ErrorCodeQueueFull         ErrorCode = "QUEUE_FULL"
-	ErrorCodeRetryNotAllowed   ErrorCode = "RETRY_NOT_ALLOWED"
-	ErrorCodeStore             ErrorCode = "STORE_ERROR"
-	ErrorCodeContextCanceled   ErrorCode = "CONTEXT_CANCELED"
-	ErrorCodeRenderFailed      ErrorCode = "RENDER_FAILED"
-	ErrorCodePrintFailed       ErrorCode = "PRINT_COMMAND_FAILED"
+	ErrorCodeInvalidTransition   ErrorCode = "INVALID_TRANSITION"
+	ErrorCodeInvalidRequest      ErrorCode = "INVALID_REQUEST"
+	ErrorCodeQueueFull           ErrorCode = "QUEUE_FULL"
+	ErrorCodeQueueDeliveryFailed ErrorCode = "QUEUE_DELIVERY_FAILED"
+	ErrorCodeRetryNotAllowed     ErrorCode = "RETRY_NOT_ALLOWED"
+	ErrorCodeStore               ErrorCode = "STORE_ERROR"
+	ErrorCodeContextCanceled     ErrorCode = "CONTEXT_CANCELED"
+	ErrorCodeRenderFailed        ErrorCode = "RENDER_FAILED"
+	ErrorCodePrintFailed         ErrorCode = "PRINT_COMMAND_FAILED"
 )
+
+// ErrAlreadyExists lets a Service distinguish an ID collision from other
+// persistence failures without importing a storage implementation.
+var ErrAlreadyExists = errors.New("job already exists")
 
 // JobError provides a stable machine-readable code alongside a readable
 // explanation suitable for logs and API responses.

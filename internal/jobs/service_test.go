@@ -29,7 +29,7 @@ func (s *memoryJobStore) Create(_ context.Context, job *Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[job.ID]; ok {
-		return fmt.Errorf("duplicate job %q", job.ID)
+		return fmt.Errorf("duplicate job %q: %w", job.ID, ErrAlreadyExists)
 	}
 	s.jobs[job.ID] = copyTestJob(job)
 	s.creates++
@@ -129,17 +129,20 @@ func TestServiceCreateInvalidRequestDoesNotPersist(t *testing.T) {
 func TestServiceCreateQueueFullDoesNotPersist(t *testing.T) {
 	jobs := newMemoryJobStore()
 	queue := NewQueue()
+	service := NewService(jobs, queue)
 	for index := 0; index < QueueCapacity; index++ {
-		queue <- fmt.Sprintf("occupied-%d", index)
+		if _, err := service.Create(context.Background(), validSourceRequest()); err != nil {
+			t.Fatalf("Create() filling queue at %d: %v", index, err)
+		}
 	}
 
-	_, err := NewService(jobs, queue).Create(context.Background(), validSourceRequest())
+	_, err := service.Create(context.Background(), validSourceRequest())
 	var jobErr *JobError
 	if !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeQueueFull {
 		t.Fatalf("Create() error = %T %v, want QUEUE_FULL JobError", err, err)
 	}
-	if jobs.creates != 0 {
-		t.Fatalf("Create() persisted %d jobs while queue was full", jobs.creates)
+	if jobs.creates != QueueCapacity {
+		t.Fatalf("Create() persisted %d jobs while queue was full, want %d", jobs.creates, QueueCapacity)
 	}
 }
 
@@ -172,11 +175,14 @@ func TestServiceRetryQueueFullLeavesFailedJobUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	queue := NewQueue()
+	service := NewService(jobs, queue)
 	for index := 0; index < QueueCapacity; index++ {
-		queue <- fmt.Sprintf("occupied-%d", index)
+		if _, err := service.Create(context.Background(), validSourceRequest()); err != nil {
+			t.Fatalf("Create() filling queue at %d: %v", index, err)
+		}
 	}
 
-	_, err := NewService(jobs, queue).Retry(context.Background(), failed.ID)
+	_, err := service.Retry(context.Background(), failed.ID)
 	var jobErr *JobError
 	if !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeQueueFull {
 		t.Fatalf("Retry() error = %T %v, want QUEUE_FULL JobError", err, err)
@@ -184,6 +190,113 @@ func TestServiceRetryQueueFullLeavesFailedJobUntouched(t *testing.T) {
 	persisted, getErr := jobs.Get(context.Background(), failed.ID)
 	if getErr != nil || persisted.Status != StatusFailed || persisted.Error == nil {
 		t.Fatalf("Retry() changed failed job on full queue: job=%#v, err=%v", persisted, getErr)
+	}
+}
+
+func TestNewServiceRejectsInvalidQueue(t *testing.T) {
+	cases := []struct {
+		name  string
+		queue chan string
+	}{
+		{"nil", nil},
+		{"unbuffered", make(chan string)},
+		{"too small", make(chan string, QueueCapacity-1)},
+		{"too large", make(chan string, QueueCapacity+1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("NewService() did not reject invalid queue")
+				}
+			}()
+			_ = NewService(newMemoryJobStore(), tc.queue)
+		})
+	}
+}
+
+func TestServiceExternalFullQueuePersistsThenReportsDeliveryFailure(t *testing.T) {
+	jobs := newMemoryJobStore()
+	queue := NewQueue()
+	for index := 0; index < QueueCapacity; index++ {
+		queue <- fmt.Sprintf("external-%d", index)
+	}
+
+	job, err := NewService(jobs, queue).Create(context.Background(), validSourceRequest())
+	var jobErr *JobError
+	if job == nil || !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeQueueDeliveryFailed {
+		t.Fatalf("Create() = %#v, %v; want persisted job and QUEUE_DELIVERY_FAILED", job, err)
+	}
+	persisted, getErr := jobs.Get(context.Background(), job.ID)
+	if getErr != nil || persisted.Status != StatusQueued {
+		t.Fatalf("persisted job = %#v, %v; want queued durable job", persisted, getErr)
+	}
+}
+
+func TestServiceClosedQueueReturnsPersistedDeliveryFailure(t *testing.T) {
+	jobs := newMemoryJobStore()
+	queue := NewQueue()
+	close(queue)
+
+	job, err := NewService(jobs, queue).Create(context.Background(), validSourceRequest())
+	var jobErr *JobError
+	if job == nil || !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeQueueDeliveryFailed {
+		t.Fatalf("Create() = %#v, %v; want persisted job and QUEUE_DELIVERY_FAILED", job, err)
+	}
+	if persisted, getErr := jobs.Get(context.Background(), job.ID); getErr != nil || persisted.Status != StatusQueued {
+		t.Fatalf("closed-queue job = %#v, %v; want queued durable job", persisted, getErr)
+	}
+}
+
+func TestSecondServiceReportsDeliveryFailureWithoutSending(t *testing.T) {
+	jobs := newMemoryJobStore()
+	queue := NewQueue()
+	_ = NewService(jobs, queue)
+	second := NewService(jobs, queue)
+	job, err := second.Create(context.Background(), validSourceRequest())
+	var jobErr *JobError
+	if job == nil || !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeQueueDeliveryFailed {
+		t.Fatalf("second Create() = %#v, %v; want durable QUEUE_DELIVERY_FAILED", job, err)
+	}
+	select {
+	case delivered := <-queue:
+		t.Fatalf("second Service delivered %q despite ownership violation", delivered)
+	default:
+	}
+}
+
+func TestServiceRegeneratesDuplicateIDAndMapsStoreContextError(t *testing.T) {
+	jobs := newMemoryJobStore()
+	if err := jobs.Create(context.Background(), &Job{ID: "collision", Status: StatusQueued}); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"collision", "fresh"}
+	service := NewServiceWithIDGenerator(jobs, NewQueue(), func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	})
+	job, err := service.Create(context.Background(), validSourceRequest())
+	if err != nil || job.ID != "fresh" {
+		t.Fatalf("Create() = %#v, %v; want regenerated fresh ID", job, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = NewService(jobs, NewQueue()).Get(ctx, "anything")
+	var jobErr *JobError
+	if !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeContextCanceled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get() canceled error = %T %v, want CONTEXT_CANCELED preserving cause", err, err)
+	}
+}
+
+func TestServiceIDGeneratorFailureDoesNotPersist(t *testing.T) {
+	jobs := newMemoryJobStore()
+	service := NewServiceWithIDGenerator(jobs, NewQueue(), func() (string, error) { return "", errors.New("random unavailable") })
+	_, err := service.Create(context.Background(), validSourceRequest())
+	var jobErr *JobError
+	if !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeStore || jobs.creates != 0 {
+		t.Fatalf("Create() = %T %v, creates=%d; want no write and STORE_ERROR", err, err, jobs.creates)
 	}
 }
 

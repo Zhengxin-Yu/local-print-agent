@@ -2,18 +2,21 @@ package jobs
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
 
-// QueueCapacity is the maximum number of jobs waiting for the single worker.
 const QueueCapacity = 100
+const maxIDGenerationAttempts = 8
 
-// NewQueue creates the fixed-capacity FIFO queue used by a Service and Worker.
+// NewQueue creates the fixed-capacity queue used by the opaque Pipeline
+// assembly. Prefer worker.NewPipeline; this function is a low-level entry.
 func NewQueue() chan string { return make(chan string, QueueCapacity) }
 
-// JobStore is the persistence boundary used by Service.
 type JobStore interface {
 	Create(context.Context, *Job) error
 	Update(context.Context, *Job) error
@@ -21,17 +24,42 @@ type JobStore interface {
 	List(context.Context) ([]*Job, error)
 }
 
-// Service owns queue submission. Its mutex makes checking capacity, durable
-// state changes, and sending IDs an indivisible operation relative to Retry.
+type IDGenerator func() (string, error)
+
+var queueRegistry = struct {
+	sync.Mutex
+	owners map[chan<- string]struct{}
+}{owners: make(map[chan<- string]struct{})}
+
+// Service is the sole queue sender. NewService is a low-level compatibility
+// constructor: queue must be non-nil with cap QueueCapacity, exactly one
+// Service may own it, and callers must not send, close, or reuse it. Prefer
+// worker.NewPipeline, which keeps the channel opaque.
 type Service struct {
-	store JobStore
-	queue chan<- string
-	mu    sync.Mutex
-	next  uint64
+	store            JobStore
+	queue            chan<- string
+	idGenerator      IDGenerator
+	mu               sync.Mutex
+	deliveries       int
+	contractViolated bool
 }
 
 func NewService(store JobStore, queue chan<- string) *Service {
-	return &Service{store: store, queue: queue}
+	return NewServiceWithIDGenerator(store, queue, cryptoID)
+}
+
+func NewServiceWithIDGenerator(store JobStore, queue chan<- string, generator IDGenerator) *Service {
+	if queue == nil || cap(queue) != QueueCapacity {
+		panic(fmt.Sprintf("jobs.NewService requires a non-nil queue with capacity %d", QueueCapacity))
+	}
+	if generator == nil {
+		generator = cryptoID
+	}
+	queueRegistry.Lock()
+	_, alreadyOwned := queueRegistry.owners[queue]
+	queueRegistry.owners[queue] = struct{}{}
+	queueRegistry.Unlock()
+	return &Service{store: store, queue: queue, idGenerator: generator, contractViolated: alreadyOwned}
 }
 
 func (s *Service) Create(ctx context.Context, request CreateJobRequest) (*Job, error) {
@@ -42,7 +70,6 @@ func (s *Service) Create(ctx context.Context, request CreateJobRequest) (*Job, e
 	if err != nil {
 		return nil, &JobError{Code: ErrorCodeInvalidRequest, Message: err.Error(), cause: err}
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := contextErr(ctx); err != nil {
@@ -51,28 +78,29 @@ func (s *Service) Create(ctx context.Context, request CreateJobRequest) (*Job, e
 	if s.store == nil {
 		return nil, &JobError{Code: ErrorCodeStore, Message: "job store is required"}
 	}
-	if queueFull(s.queue) {
+	violation := s.queueInterfered()
+	if queueFull(s.queue) && !violation {
 		return nil, &JobError{Code: ErrorCodeQueueFull, Message: "print queue is full"}
 	}
-	now := time.Now().UTC()
-	s.next++
-	job := &Job{
-		ID:          fmt.Sprintf("job-%d-%d", now.UnixNano(), s.next),
-		Type:        normalized.Type,
-		PrinterName: normalized.PrinterName,
-		Payload:     append([]byte(nil), normalized.Payload...),
-		Status:      StatusQueued,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Attempts:    0,
+	for attempt := 0; attempt < maxIDGenerationAttempts; attempt++ {
+		id, err := s.idGenerator()
+		if err != nil {
+			return nil, wrapStoreError("generate job ID", err)
+		}
+		if id == "" {
+			return nil, &JobError{Code: ErrorCodeStore, Message: "generate job ID: empty ID"}
+		}
+		now := time.Now().UTC()
+		job := &Job{ID: id, Type: normalized.Type, PrinterName: normalized.PrinterName, Payload: append([]byte(nil), normalized.Payload...), Status: StatusQueued, CreatedAt: now, UpdatedAt: now}
+		if err := s.store.Create(ctx, job); err != nil {
+			if errors.Is(err, ErrAlreadyExists) {
+				continue
+			}
+			return nil, wrapStoreError("create job", err)
+		}
+		return s.deliver(job, violation)
 	}
-	if err := s.store.Create(ctx, job); err != nil {
-		return nil, wrapStoreError("create job", err)
-	}
-	// Service is the only sender, so the capacity check above remains valid
-	// while its mutex is held. Never let a full queue silently drop an ID.
-	s.queue <- job.ID
-	return cloneServiceJob(job), nil
+	return nil, &JobError{Code: ErrorCodeStore, Message: "generate job ID: too many collisions", cause: ErrAlreadyExists}
 }
 
 func (s *Service) Get(ctx context.Context, id string) (*Job, error) {
@@ -125,7 +153,8 @@ func (s *Service) Retry(ctx context.Context, id string) (*Job, error) {
 	if job.Status != StatusFailed {
 		return nil, &JobError{Code: ErrorCodeRetryNotAllowed, Message: "only failed jobs can be retried"}
 	}
-	if queueFull(s.queue) {
+	violation := s.queueInterfered()
+	if queueFull(s.queue) && !violation {
 		return nil, &JobError{Code: ErrorCodeQueueFull, Message: "print queue is full"}
 	}
 	if err := Transition(job, StatusQueued, time.Now().UTC()); err != nil {
@@ -134,12 +163,42 @@ func (s *Service) Retry(ctx context.Context, id string) (*Job, error) {
 	if err := s.store.Update(ctx, job); err != nil {
 		return nil, wrapStoreError("retry job", err)
 	}
-	s.queue <- job.ID
-	return cloneServiceJob(job), nil
+	return s.deliver(job, violation)
 }
 
-func queueFull(queue chan<- string) bool {
-	return queue == nil || cap(queue) == 0 || len(queue) >= cap(queue)
+func (s *Service) queueInterfered() bool { return s.contractViolated || len(s.queue) > s.deliveries }
+
+func (s *Service) deliver(job *Job, violation bool) (*Job, error) {
+	copy := cloneServiceJob(job)
+	if violation || !trySend(s.queue, job.ID) {
+		return copy, &JobError{Code: ErrorCodeQueueDeliveryFailed, Message: "queued job could not be delivered to worker queue"}
+	}
+	s.deliveries++
+	return copy, nil
+}
+
+func trySend(queue chan<- string, id string) (sent bool) {
+	defer func() {
+		if recover() != nil {
+			sent = false
+		}
+	}()
+	select {
+	case queue <- id:
+		return true
+	default:
+		return false
+	}
+}
+
+func queueFull(queue chan<- string) bool { return len(queue) >= cap(queue) }
+
+func cryptoID() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes[:]), nil
 }
 
 func contextErr(ctx context.Context) error {
@@ -153,6 +212,9 @@ func contextErr(ctx context.Context) error {
 }
 
 func wrapStoreError(operation string, err error) *JobError {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return &JobError{Code: ErrorCodeContextCanceled, Message: fmt.Sprintf("%s: %v", operation, err), cause: err}
+	}
 	return &JobError{Code: ErrorCodeStore, Message: fmt.Sprintf("%s: %v", operation, err), cause: err}
 }
 

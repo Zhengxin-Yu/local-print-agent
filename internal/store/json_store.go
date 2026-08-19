@@ -85,7 +85,7 @@ func (s *JSONStore) Create(ctx context.Context, job *jobs.Job) error {
 		return err
 	}
 	if _, exists := s.jobs[job.ID]; exists {
-		return fmt.Errorf("create job %q: already exists", job.ID)
+		return fmt.Errorf("create job %q: %w", job.ID, ErrAlreadyExists)
 	}
 
 	next := cloneJobs(s.jobs)
