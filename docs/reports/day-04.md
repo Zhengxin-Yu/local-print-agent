@@ -61,7 +61,9 @@ docs/reports/                每日说明、审查记录和截图
 
 ## 当前 Fake 边界
 
-页面与主 API 流程已可演示。Fake renderer 生成明确标识为 `FAKE RENDERER` 的本地占位 PDF，Fake Printer 仅记录命令；没有 HTML 模板渲染、Chromedp、真实 PDF 预览或平台打印。
+页面与主 API 流程已可演示。Fake renderer 生成带 Catalog、Page、Helvetica 内容流、xref/trailer 的最小合法单页 PDF，页面文本明确标识 `FAKE RENDERER` 和任务 ID；它不是 HTML/Chromedp 渲染。Fake Printer 仅记录命令；没有真实 PDF 预览或平台打印。
+
+修正复验：2026-08-19 使用实际创建的 Fake 源码任务运行 MiKTeX `pdfinfo`，返回 0，并报告 1 页、612×792 points、PDF 1.4。网页错误提示现在按操作来源管理：预览 501 不会被后台两秒刷新成功清除，且刷新失败会继续向创建/重试调用方报告失败。浏览器自动化连接受本机 DevTools 500 策略阻断，行为由网页静态回归契约覆盖。
 
 ## 明日计划
 
