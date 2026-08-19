@@ -242,6 +242,32 @@ func TestNormalizeCreateRequestNormalizesBalloonPayloadStrings(t *testing.T) {
 	}
 }
 
+func TestNormalizeCreateRequestNormalizesOptionalRenderMetadataWithoutMakingItRequired(t *testing.T) {
+	balloon, err := NormalizeCreateRequest(CreateJobRequest{
+		Type:        JobTypeBalloon,
+		PrinterName: "front-desk",
+		Payload:     json.RawMessage(`{"team_name":"Team Atlas","problem_id":"A","solved_at":"2026-08-19T09:30:00Z","contest_name":" 比赛名 ","team_id":" team001 ","room":" A101 ","balloon_color":" red "}`),
+	})
+	if err != nil {
+		t.Fatalf("NormalizeCreateRequest(balloon) error = %v", err)
+	}
+	if got, want := string(balloon.Payload), `{"team_name":"Team Atlas","problem_id":"A","solved_at":"2026-08-19T09:30:00Z","contest_name":"比赛名","team_id":"team001","room":"A101","balloon_color":"red"}`; got != want {
+		t.Fatalf("balloon payload = %s, want %s", got, want)
+	}
+
+	source, err := NormalizeCreateRequest(CreateJobRequest{
+		Type:        JobTypeSource,
+		PrinterName: "front-desk",
+		Payload:     json.RawMessage(`{"language":"go","source_code":"func main() {}","contest_name":" 比赛名 ","team_id":" team001 ","team_name":" Team Atlas ","room":" A101 ","problem_id":" C "}`),
+	})
+	if err != nil {
+		t.Fatalf("NormalizeCreateRequest(source) error = %v", err)
+	}
+	if got, want := string(source.Payload), `{"language":"go","source_code":"func main() {}","contest_name":"比赛名","team_id":"team001","team_name":"Team Atlas","room":"A101","problem_id":"C"}`; got != want {
+		t.Fatalf("source payload = %s, want %s", got, want)
+	}
+}
+
 func TestValidateCreateRequestDoesNotModifyRequest(t *testing.T) {
 	req := CreateJobRequest{
 		Type:        JobType(" balloon_ticket "),

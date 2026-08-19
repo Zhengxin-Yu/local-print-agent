@@ -56,6 +56,10 @@ func normalizeBalloonPayload(raw json.RawMessage) (json.RawMessage, error) {
 	payload.TeamName = strings.TrimSpace(payload.TeamName)
 	payload.ProblemID = strings.TrimSpace(payload.ProblemID)
 	payload.SolvedAt = strings.TrimSpace(payload.SolvedAt)
+	payload.ContestName = strings.TrimSpace(payload.ContestName)
+	payload.TeamID = strings.TrimSpace(payload.TeamID)
+	payload.Room = strings.TrimSpace(payload.Room)
+	payload.BalloonColor = strings.TrimSpace(payload.BalloonColor)
 	if payload.TeamName == "" {
 		return nil, errors.New("balloon team_name is required")
 	}
@@ -80,6 +84,11 @@ func normalizeSourceCodePayload(raw json.RawMessage) (json.RawMessage, error) {
 
 	payload.Language = strings.TrimSpace(payload.Language)
 	payload.SourceCode = strings.TrimSpace(payload.SourceCode)
+	payload.ContestName = strings.TrimSpace(payload.ContestName)
+	payload.TeamID = strings.TrimSpace(payload.TeamID)
+	payload.TeamName = strings.TrimSpace(payload.TeamName)
+	payload.Room = strings.TrimSpace(payload.Room)
+	payload.ProblemID = strings.TrimSpace(payload.ProblemID)
 	if !isSupportedLanguage(payload.Language) {
 		return nil, fmt.Errorf("unsupported source language %q", payload.Language)
 	}

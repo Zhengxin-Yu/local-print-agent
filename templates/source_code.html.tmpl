@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>源码打印 {{.JobID}}</title>
+<style>
+@page { size: A4; margin: 16mm 13mm 15mm; }
+* { box-sizing: border-box; }
+body { color: #161616; font-family: "Cascadia Mono", Consolas, "Liberation Mono", monospace; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.page-header { border-bottom: 1px solid #777; margin-bottom: 5mm; padding-bottom: 2mm; font-family: "Microsoft YaHei", sans-serif; font-size: 9pt; }
+.page-header span { display: inline-block; margin-right: 4mm; overflow-wrap: anywhere; }
+.page-footer { position: fixed; bottom: -10mm; width: 100%; text-align: center; font-family: "Microsoft YaHei", sans-serif; font-size: 8pt; }
+.page-footer::after { content: "第 " counter(page) " 页"; }
+pre.chroma { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; tab-size: 4; font-size: 8.5pt; line-height: 1.4; }
+.chroma { color: #24292e; background-color: #fff; }
+.chroma .ln { color: #6a737d; padding-right: 1em; user-select: none; }
+.chroma .k, .chroma .kd, .chroma .kn { color: #d73a49; font-weight: bold; }
+.chroma .s, .chroma .s1, .chroma .s2 { color: #032f62; }
+.chroma .c, .chroma .c1, .chroma .cm { color: #6a737d; font-style: italic; }
+.chroma .nf, .chroma .nx { color: #6f42c1; }
+</style>
+</head>
+<body>
+<header class="page-header">
+  <span>比赛：{{.ContestName}}</span><span>队伍：{{.TeamID}}</span><span>队名：{{.TeamName}}</span><span>房间：{{.Room}}</span><span>题目：{{.ProblemID}}</span><span>打印编号：{{.JobID}}</span>
+</header>
+<main>{{.HighlightedCode}}</main>
+<footer class="page-footer"></footer>
+</body>
+</html>

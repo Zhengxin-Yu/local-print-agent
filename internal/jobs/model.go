@@ -92,13 +92,22 @@ type CreateJobRequest struct {
 
 // BalloonPayload is the content printed on a balloon ticket.
 type BalloonPayload struct {
-	TeamName  string `json:"team_name"`
-	ProblemID string `json:"problem_id"`
-	SolvedAt  string `json:"solved_at"`
+	TeamName     string `json:"team_name"`
+	ProblemID    string `json:"problem_id"`
+	SolvedAt     string `json:"solved_at"`
+	ContestName  string `json:"contest_name,omitempty"`
+	TeamID       string `json:"team_id,omitempty"`
+	Room         string `json:"room,omitempty"`
+	BalloonColor string `json:"balloon_color,omitempty"`
 }
 
 // SourceCodePayload is the content printed for a source-code job.
 type SourceCodePayload struct {
-	Language   string `json:"language"`
-	SourceCode string `json:"source_code"`
+	Language    string `json:"language"`
+	SourceCode  string `json:"source_code"`
+	ContestName string `json:"contest_name,omitempty"`
+	TeamID      string `json:"team_id,omitempty"`
+	TeamName    string `json:"team_name,omitempty"`
+	Room        string `json:"room,omitempty"`
+	ProblemID   string `json:"problem_id,omitempty"`
 }
