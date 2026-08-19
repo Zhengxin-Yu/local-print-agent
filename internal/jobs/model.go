@@ -24,9 +24,28 @@ const (
 	StatusFailed    Status = "failed"
 )
 
-// ErrorCode is a stable machine-readable reason for a failed job. Concrete
-// codes are introduced with the shared error contract.
+// ErrorCode is a stable machine-readable reason for a failed job.
 type ErrorCode string
+
+const (
+	ErrorCodeInvalidTransition ErrorCode = "invalid_transition"
+	ErrorCodeRenderFailed      ErrorCode = "render_failed"
+	ErrorCodePrintFailed       ErrorCode = "print_failed"
+)
+
+// JobError provides a stable machine-readable code alongside a readable
+// explanation suitable for logs and API responses.
+type JobError struct {
+	Code    ErrorCode `json:"code"`
+	Message string    `json:"message"`
+}
+
+func (e *JobError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
 
 // Job contains the fields required by the future persistent job state machine.
 type Job struct {
@@ -35,9 +54,12 @@ type Job struct {
 	PrinterName string          `json:"printer_name"`
 	Payload     json.RawMessage `json:"payload"`
 	Status      Status          `json:"status"`
-	Error       ErrorCode       `json:"error,omitempty"`
+	Error       *JobError       `json:"error,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+	StartedAt   time.Time       `json:"started_at,omitempty"`
+	FinishedAt  time.Time       `json:"finished_at,omitempty"`
+	Attempts    int             `json:"attempts"`
 	PDFPath     string          `json:"pdf_path,omitempty"`
 }
 
