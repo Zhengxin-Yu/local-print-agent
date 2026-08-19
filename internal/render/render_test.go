@@ -62,7 +62,7 @@ func TestRenderSourceHTMLHighlightsSupportedLanguagesAndPreservesSourceAsText(t 
 				t.Fatalf("RenderSourceHTML() error = %v", err)
 			}
 			page := string(html)
-			for _, want := range []string{"比赛名", "team001", "A101", "C", "source-job-001", "中文注释", "chroma", "line"} {
+			for _, want := range []string{"source-job-001", "中文注释", "chroma", "line"} {
 				if !strings.Contains(page, want) {
 					t.Errorf("source HTML does not contain %q", want)
 				}
@@ -145,8 +145,8 @@ func TestRenderSourceHTMLEscapesLongMetadataWithoutChangingHeaderHeightContract(
 	if strings.Contains(rendered, "<script>") {
 		t.Fatal("source HTML contains raw script markup from long metadata")
 	}
-	if got := strings.Count(rendered, "BEGIN-&lt;script&gt;alert(1)&lt;/script&gt;-END-"); got != 7 {
-		t.Fatalf("escaped long metadata occurrences = %d, want 7", got)
+	if got := strings.Count(rendered, "BEGIN-&lt;script&gt;alert(1)&lt;/script&gt;-END-"); got != 1 {
+		t.Fatalf("escaped job ID occurrences = %d, want 1", got)
 	}
 	assertSourcePrintContract(t, rendered)
 }
@@ -154,17 +154,16 @@ func TestRenderSourceHTMLEscapesLongMetadataWithoutChangingHeaderHeightContract(
 func assertSourcePrintContract(t *testing.T, page string) {
 	t.Helper()
 	page = strings.ReplaceAll(page, "\r\n", "\n")
-	for _, want := range []string{
-		"@page {\n  size: A4;\n  margin: 24mm 13mm 18mm;\n  @bottom-center {\n    content: \"第 \" counter(page) \" / \" counter(pages) \" 页\";\n    font-family: \"Microsoft YaHei\", sans-serif;\n    font-size: 8pt;\n  }\n}",
-		".page-header { position: fixed; top: -20mm; left: 0; right: 0; height: 14mm; max-height: 14mm; overflow: hidden; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); column-gap: 2mm; border-bottom: 1px solid #777; font-family: \"Microsoft YaHei\", sans-serif; font-size: 9pt; }",
-		".page-header span { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
-	} {
+	for _, want := range []string{"@page {\n  size: A4;\n}"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("source HTML missing exact print contract %q", want)
 		}
 	}
-	if strings.Contains(page, "page-footer") || strings.Contains(page, `<footer`) {
-		t.Error("source HTML retains the obsolete fixed footer instead of a page margin box")
+	if strings.Contains(page, "page-header") || strings.Contains(page, `<header`) || strings.Contains(page, "@bottom-center") {
+		t.Error("source HTML embeds pagination decorations instead of using CDP header/footer templates")
+	}
+	if strings.Contains(page, "size: A4;\n  margin") {
+		t.Error("source @page CSS overrides the explicit CDP header/footer margins")
 	}
 	if strings.Contains(page, "main { padding-top:") {
 		t.Error("source HTML relies on a first-page main padding instead of the repeated @page top margin")
@@ -186,12 +185,17 @@ func TestRenderedVisibleValuesAreEscapedAndMissingMetadataUsesPlaceholder(t *tes
 	}
 	assertNoRawScript(t, string(page))
 
-	page, err = RenderSourceHTML(&jobs.Job{Type: jobs.JobTypeSource, Payload: json.RawMessage(`{"language":"go","source_code":"func main() {}"}`)})
+	emptySource := &jobs.Job{Type: jobs.JobTypeSource, Payload: json.RawMessage(`{"language":"go","source_code":"func main() {}"}`)}
+	page, err = RenderSourceHTML(emptySource)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(page), "未提供") != 5 {
-		t.Fatalf("source metadata placeholders = %d, want 5", strings.Count(string(page), "未提供"))
+	options, err := printOptionsForJob(emptySource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(options.headerTemplate, "未提供") != 6 {
+		t.Fatalf("source metadata placeholders = %d, want 6", strings.Count(options.headerTemplate, "未提供"))
 	}
 	page, err = RenderBalloonHTML(&jobs.Job{Type: jobs.JobTypeBalloon, Payload: json.RawMessage(`{"team_name":"Team Atlas","problem_id":"C","solved_at":"2026-08-19T09:30:00Z"}`)})
 	if err != nil {

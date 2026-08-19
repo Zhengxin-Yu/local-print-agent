@@ -5,20 +5,11 @@
 <meta name="local-print-agent-minimum-chrome-major" content="{{.MinimumChromeMajor}}">
 <title>源码打印 {{.JobID}}</title>
 <style>
-/* Chromium 131+ is required for the @bottom-center page margin box. */
 @page {
   size: A4;
-  margin: 24mm 13mm 18mm;
-  @bottom-center {
-    content: "第 " counter(page) " / " counter(pages) " 页";
-    font-family: "Microsoft YaHei", sans-serif;
-    font-size: 8pt;
-  }
 }
 * { box-sizing: border-box; }
 body { color: #161616; font-family: "Cascadia Mono", Consolas, "Liberation Mono", monospace; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.page-header { position: fixed; top: -20mm; left: 0; right: 0; height: 14mm; max-height: 14mm; overflow: hidden; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); column-gap: 2mm; border-bottom: 1px solid #777; font-family: "Microsoft YaHei", sans-serif; font-size: 9pt; }
-.page-header span { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 pre.chroma { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; tab-size: 4; font-size: 8.5pt; line-height: 1.4; }
 .chroma { color: #24292e; background-color: #fff; }
 .chroma .line { display: flex; align-items: flex-start; }
@@ -31,9 +22,6 @@ pre.chroma { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-bre
 </style>
 </head>
 <body>
-<header class="page-header">
-  <span>比赛：{{.ContestName}}</span><span>队伍：{{.TeamID}}</span><span>队名：{{.TeamName}}</span><span>房间：{{.Room}}</span><span>题目：{{.ProblemID}}</span><span>打印编号：{{.JobID}}</span>
-</header>
 <main>{{.HighlightedCode}}</main>
 </body>
 </html>

@@ -69,6 +69,11 @@ func (e *JobError) Unwrap() error {
 	return e.cause
 }
 
+// NewJobError creates a stable public error while retaining an internal cause.
+func NewJobError(code ErrorCode, message string, cause error) *JobError {
+	return &JobError{Code: code, Message: message, cause: cause}
+}
+
 // Job contains the fields required by the future persistent job state machine.
 type Job struct {
 	ID          string          `json:"id"`

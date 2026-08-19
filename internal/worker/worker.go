@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"local-print-agent/internal/jobs"
@@ -26,10 +27,12 @@ type Worker struct {
 	printer  printer.Adapter
 	queue    <-chan string
 	errors   chan error
+	done     chan struct{}
+	runOnce  sync.Once
 }
 
 func New(store Store, renderer render.Renderer, printerAdapter printer.Adapter, queue <-chan string) *Worker {
-	return &Worker{store: store, renderer: renderer, printer: printerAdapter, queue: queue, errors: make(chan error, 32)}
+	return &Worker{store: store, renderer: renderer, printer: printerAdapter, queue: queue, errors: make(chan error, 32), done: make(chan struct{})}
 }
 
 // NewPipeline is the production assembly entry point. Its queue is private:
@@ -48,8 +51,26 @@ func (w *Worker) Errors() <-chan error {
 	return w.errors
 }
 
+// Done closes after Run has returned, including cleanup performed by an active renderer.
+func (w *Worker) Done() <-chan struct{} {
+	if w == nil {
+		return nil
+	}
+	return w.done
+}
+
 func (w *Worker) Run(ctx context.Context) {
-	if ctx == nil || w == nil || w.queue == nil {
+	if w == nil {
+		return
+	}
+	w.runOnce.Do(func() {
+		defer close(w.done)
+		w.run(ctx)
+	})
+}
+
+func (w *Worker) run(ctx context.Context) {
+	if ctx == nil || w.queue == nil {
 		return
 	}
 	for {
@@ -84,17 +105,22 @@ func (w *Worker) process(ctx context.Context, id string) {
 		return
 	}
 	if w.renderer == nil {
-		w.fail(ctx, job, jobs.ErrorCodeRenderFailed, errors.New("renderer is required"))
+		err := errors.New("renderer is required")
+		w.publish(err)
+		w.fail(ctx, job, jobs.ErrorCodeRenderFailed, "PDF rendering failed")
 		return
 	}
 	pdfPath, err := w.renderer.Render(ctx, job)
 	if err != nil {
 		code := jobs.ErrorCodeRenderFailed
+		message := "PDF rendering failed"
 		var jobError *jobs.JobError
 		if errors.As(err, &jobError) {
 			code = jobError.Code
+			message = jobError.Message
 		}
-		w.fail(ctx, job, code, err)
+		w.publish(err)
+		w.fail(ctx, job, code, message)
 		return
 	}
 	job.PDFPath = pdfPath
@@ -106,11 +132,14 @@ func (w *Worker) process(ctx context.Context, id string) {
 		return
 	}
 	if w.printer == nil {
-		w.fail(ctx, job, jobs.ErrorCodePrintFailed, errors.New("printer adapter is required"))
+		err := errors.New("printer adapter is required")
+		w.publish(err)
+		w.fail(ctx, job, jobs.ErrorCodePrintFailed, "Printing failed")
 		return
 	}
 	if err := w.printer.Print(ctx, job.PrinterName, job.PDFPath); err != nil {
-		w.fail(ctx, job, jobs.ErrorCodePrintFailed, err)
+		w.publish(err)
+		w.fail(ctx, job, jobs.ErrorCodePrintFailed, "Printing failed")
 		return
 	}
 	if err := jobs.Transition(job, jobs.StatusSucceeded, time.Now().UTC()); err != nil {
@@ -149,11 +178,11 @@ func (w *Worker) persist(ctx context.Context, job *jobs.Job) bool {
 	}
 }
 
-func (w *Worker) fail(ctx context.Context, job *jobs.Job, code jobs.ErrorCode, cause error) {
-	if job == nil || cause == nil {
+func (w *Worker) fail(ctx context.Context, job *jobs.Job, code jobs.ErrorCode, message string) {
+	if job == nil || message == "" {
 		return
 	}
-	job.Error = &jobs.JobError{Code: code, Message: cause.Error()}
+	job.Error = &jobs.JobError{Code: code, Message: message}
 	if err := jobs.Transition(job, jobs.StatusFailed, time.Now().UTC()); err != nil {
 		w.publish(err)
 		return

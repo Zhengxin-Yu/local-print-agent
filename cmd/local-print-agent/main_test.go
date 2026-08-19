@@ -48,6 +48,71 @@ func TestStartServesHealthAndShutsDownWithContext(t *testing.T) {
 	}
 }
 
+type cleanupBlockingRenderer struct {
+	entered chan struct{}
+	release chan struct{}
+	profile string
+}
+
+func (r *cleanupBlockingRenderer) Render(ctx context.Context, _ *jobs.Job) (string, error) {
+	close(r.entered)
+	<-ctx.Done()
+	<-r.release
+	if err := os.RemoveAll(r.profile); err != nil {
+		return "", err
+	}
+	return "", ctx.Err()
+}
+
+func TestRunningDoneWaitsForWorkerAndActiveRendererCleanup(t *testing.T) {
+	dataDir := t.TempDir()
+	profile := filepath.Join(dataDir, "chromedp-profile")
+	if err := os.MkdirAll(profile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	renderer := &cleanupBlockingRenderer{entered: make(chan struct{}), release: make(chan struct{}), profile: profile}
+	ctx, cancel := context.WithCancel(context.Background())
+	running, err := startWithBuilder(ctx, config.Config{Host: "127.0.0.1", FirstPort: 0, LastPort: 0, DataDir: dataDir}, func(cfg config.Config) (*application, error) {
+		return buildApplicationWithRenderer(cfg, renderer)
+	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: time.Second}
+	submitDemoJob(t, client, running.URL, jobs.CreateJobRequest{Type: jobs.JobTypeBalloon, PrinterName: fakePrinterName, Payload: json.RawMessage(`{"team_name":"T","problem_id":"A","solved_at":"2026-08-19T09:30:00Z"}`)})
+	select {
+	case <-renderer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("renderer did not start")
+	}
+	cancel()
+	select {
+	case <-running.Done:
+		close(renderer.release)
+		t.Fatal("running.Done closed before active renderer cleanup")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(renderer.release)
+	select {
+	case err := <-running.Done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("running.Done did not close after renderer cleanup")
+	}
+	if _, err := os.Stat(profile); !os.IsNotExist(err) {
+		t.Fatalf("renderer profile remains after Done: %v", err)
+	}
+	parsed, _ := url.Parse(running.URL)
+	listener, err := net.Listen("tcp", parsed.Host)
+	if err != nil {
+		t.Fatalf("server port remains occupied after Done: %v", err)
+	}
+	listener.Close()
+}
+
 func TestBuildApplicationProvidesAVisibleFakePrinter(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir()}
 	renderer, err := render.NewFake(filepath.Join(cfg.DataDir, "fake-pdfs"))

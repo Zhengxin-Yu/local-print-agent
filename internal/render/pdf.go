@@ -2,8 +2,10 @@ package render
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,14 +34,22 @@ var (
 )
 
 type versionProbe func(context.Context, string) (int, error)
-type pdfPrintFunc func(context.Context, string, string) ([]byte, error)
+type pdfPrintOptions struct {
+	displayHeaderFooter            bool
+	headerTemplate, footerTemplate string
+	marginTop, marginBottom        float64
+	marginLeft, marginRight        float64
+}
+
+type pdfPrintFunc func(context.Context, string, string, pdfPrintOptions) ([]byte, error)
 
 // PDFRenderer renders job HTML with an isolated Chromium-family process.
 type PDFRenderer struct {
 	outputDir   string
 	browserPath string
 	printToPDF  pdfPrintFunc
-	mu          sync.Mutex
+	permitOnce  sync.Once
+	permit      chan struct{}
 }
 
 var _ Renderer = (*PDFRenderer)(nil)
@@ -68,6 +78,9 @@ func newPDFRenderer(outputDir, browserPath string, probe versionProbe) (*PDFRend
 	}
 	if err := os.MkdirAll(filepath.Join(outputDir, "jobs"), 0o755); err != nil {
 		return nil, fmt.Errorf("create PDF jobs directory: %w", err)
+	}
+	if err := recoverInterruptedPublishes(filepath.Join(outputDir, "jobs")); err != nil {
+		return nil, fmt.Errorf("recover interrupted PDF publish: %w", err)
 	}
 	return &PDFRenderer{outputDir: outputDir, browserPath: resolved, printToPDF: chromedpPrintToPDF}, nil
 }
@@ -215,36 +228,94 @@ func (r *PDFRenderer) Render(ctx context.Context, job *jobs.Job) (string, error)
 	if err != nil {
 		return "", err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.renderLocked(ctx, job.ID, html)
+	r.permitOnce.Do(func() { r.permit = make(chan struct{}, 1) })
+	select {
+	case r.permit <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	defer func() { <-r.permit }()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	options, err := printOptionsForJob(job)
+	if err != nil {
+		return "", err
+	}
+	result, err := r.renderLocked(ctx, job.ID, html, options)
+	if err == nil {
+		return result, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	var jobError *jobs.JobError
+	if errors.As(err, &jobError) {
+		return "", err
+	}
+	return "", jobs.NewJobError(jobs.ErrorCodeRenderFailed, "PDF rendering failed", err)
 }
 
-func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byte) (result string, err error) {
+func printOptionsForJob(job *jobs.Job) (pdfPrintOptions, error) {
+	if job.Type != jobs.JobTypeSource {
+		return pdfPrintOptions{}, nil
+	}
+	var payload jobs.SourceCodePayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return pdfPrintOptions{}, fmt.Errorf("decode source header: %w", err)
+	}
+	escape := func(value string) string {
+		if strings.TrimSpace(value) == "" {
+			value = "未提供"
+		}
+		return html.EscapeString(value)
+	}
+	header := fmt.Sprintf(`<div style="box-sizing:border-box;width:100%%;margin:0 13mm;border-bottom:1px solid #777;padding:0 0 2mm;font:9px 'Microsoft YaHei',sans-serif;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">比赛：%s　队伍：%s　队名：%s　房间：%s　题目：%s　打印编号：%s</div>`, escape(payload.ContestName), escape(payload.TeamID), escape(payload.TeamName), escape(payload.Room), escape(payload.ProblemID), escape(job.ID))
+	footer := `<div style="width:100%;text-align:center;font:8px 'Microsoft YaHei',sans-serif;color:#555">第 <span class="pageNumber"></span> / <span class="totalPages"></span> 页</div>`
+	return pdfPrintOptions{displayHeaderFooter: true, headerTemplate: header, footerTemplate: footer, marginTop: 0.82, marginBottom: 0.62, marginLeft: 0.51, marginRight: 0.51}, nil
+}
+
+func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byte, options pdfPrintOptions) (result string, err error) {
 	jobsRoot := filepath.Join(r.outputDir, "jobs")
 	if err := os.MkdirAll(jobsRoot, 0o755); err != nil {
 		return "", fmt.Errorf("create PDF jobs directory: %w", err)
 	}
-	staging, err := os.MkdirTemp(jobsRoot, "."+jobID+"-")
-	if err != nil {
-		return "", fmt.Errorf("create render staging directory: %w", err)
+	destination := filepath.Join(jobsRoot, jobID)
+	_, statErr := os.Stat(destination)
+	createdDestination := os.IsNotExist(statErr)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return "", fmt.Errorf("inspect render directory: %w", statErr)
 	}
-	committed := false
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		return "", fmt.Errorf("create render directory: %w", err)
+	}
+	var temporaryPaths []string
 	defer func() {
-		if !committed {
-			_ = os.RemoveAll(staging)
+		for _, path := range temporaryPaths {
+			if path == "" {
+				continue
+			}
+			if cleanupErr := os.Remove(path); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+				err = errors.Join(err, fmt.Errorf("clean render staging file: %w", cleanupErr))
+			}
+		}
+		if err != nil && createdDestination {
+			if cleanupErr := os.Remove(destination); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+				err = errors.Join(err, fmt.Errorf("clean failed render directory: %w", cleanupErr))
+			}
 		}
 	}()
 
-	htmlPath := filepath.Join(staging, "render.html")
-	if err := writeAtomicFile(htmlPath, html, 0o600); err != nil {
+	htmlPath, err := writeTemporaryFile(destination, ".render-*.html", html, 0o600)
+	if err != nil {
 		return "", fmt.Errorf("write render HTML: %w", err)
 	}
+	temporaryPaths = append(temporaryPaths, htmlPath)
 	documentURL, err := fileURL(htmlPath)
 	if err != nil {
 		return "", err
 	}
-	pdf, err := r.printToPDF(ctx, r.browserPath, documentURL)
+	pdf, err := r.printToPDF(ctx, r.browserPath, documentURL, options)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
@@ -254,50 +325,84 @@ func (r *PDFRenderer) renderLocked(ctx context.Context, jobID string, html []byt
 	if !strings.HasPrefix(string(pdf), "%PDF-") {
 		return "", errors.New("renderer returned an invalid PDF")
 	}
-	if err := writeAtomicFile(filepath.Join(staging, "preview.pdf"), pdf, 0o600); err != nil {
+	pdfPath, err := writeTemporaryFile(destination, ".render-*.pdf", pdf, 0o600)
+	if err != nil {
 		return "", fmt.Errorf("write preview PDF: %w", err)
 	}
-
-	destination := filepath.Join(jobsRoot, jobID)
-	backup := filepath.Join(jobsRoot, "."+jobID+"-previous")
-	_ = os.RemoveAll(backup)
-	if _, statErr := os.Stat(destination); statErr == nil {
-		if err := os.Rename(destination, backup); err != nil {
-			return "", fmt.Errorf("prepare existing render replacement: %w", err)
-		}
+	temporaryPaths = append(temporaryPaths, pdfPath)
+	if err := atomicReplaceFile(pdfPath, filepath.Join(destination, "preview.pdf")); err != nil {
+		return "", fmt.Errorf("publish preview PDF: %w", err)
 	}
-	if err := os.Rename(staging, destination); err != nil {
-		_ = os.Rename(backup, destination)
-		return "", fmt.Errorf("publish rendered job: %w", err)
+	temporaryPaths[1] = ""
+	if err := atomicReplaceFile(htmlPath, filepath.Join(destination, "render.html")); err != nil {
+		return "", fmt.Errorf("publish render HTML: %w", err)
 	}
-	committed = true
-	_ = os.RemoveAll(backup)
+	temporaryPaths[0] = ""
 	return filepath.Join(destination, "preview.pdf"), nil
 }
 
-func writeAtomicFile(path string, contents []byte, permissions os.FileMode) (err error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".render-*")
+func writeTemporaryFile(directory, pattern string, contents []byte, permissions os.FileMode) (path string, err error) {
+	temporary, err := os.CreateTemp(directory, pattern)
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			if closeErr := temporary.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+		}
+		if err != nil {
+			if removeErr := os.Remove(temporaryPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errors.Join(err, removeErr)
+			}
+		}
+	}()
+	if err := temporary.Chmod(permissions); err != nil {
+		return "", err
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		return "", err
+	}
+	if err := temporary.Sync(); err != nil {
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	closed = true
+	return temporaryPath, nil
+}
+
+func recoverInterruptedPublishes(jobsRoot string) error {
+	entries, err := os.ReadDir(jobsRoot)
 	if err != nil {
 		return err
 	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}()
-	if err := temporary.Chmod(permissions); err != nil {
-		return err
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, "-previous") {
+			continue
+		}
+		jobID := strings.TrimSuffix(strings.TrimPrefix(name, "."), "-previous")
+		if !generatedJobID.MatchString(jobID) {
+			continue
+		}
+		legacy := filepath.Join(jobsRoot, name)
+		destination := filepath.Join(jobsRoot, jobID)
+		if _, statErr := os.Stat(destination); os.IsNotExist(statErr) {
+			if err := os.Rename(legacy, destination); err != nil {
+				return err
+			}
+		} else if statErr != nil {
+			return statErr
+		} else if err := os.RemoveAll(legacy); err != nil {
+			return err
+		}
 	}
-	if _, err := temporary.Write(contents); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
+	return nil
 }
 
 func fileURL(path string) (string, error) {
@@ -312,7 +417,7 @@ func fileURL(path string) (string, error) {
 	return (&url.URL{Scheme: "file", Path: slashed}).String(), nil
 }
 
-func chromedpPrintToPDF(ctx context.Context, browserPath, documentURL string) ([]byte, error) {
+func chromedpPrintToPDF(ctx context.Context, browserPath, documentURL string, options pdfPrintOptions) ([]byte, error) {
 	var pdf []byte
 	err := withBrowserContext(ctx, browserPath, func(browserContext context.Context) error {
 		timedContext, cancel := context.WithTimeout(browserContext, renderTimeout)
@@ -321,7 +426,14 @@ func chromedpPrintToPDF(ctx context.Context, browserPath, documentURL string) ([
 			chromedp.Navigate(documentURL),
 			chromedp.Evaluate(`(async () => { if (document.readyState !== "complete") { await new Promise(resolve => window.addEventListener("load", resolve, {once:true})); } if (document.fonts && document.fonts.ready) { await document.fonts.ready; } return true; })()`, nil),
 			chromedp.ActionFunc(func(actionContext context.Context) error {
-				data, _, err := page.PrintToPDF().WithPrintBackground(true).WithPreferCSSPageSize(true).Do(actionContext)
+				command := page.PrintToPDF().WithPrintBackground(true).WithPreferCSSPageSize(true)
+				if options.displayHeaderFooter {
+					command = command.WithDisplayHeaderFooter(true).
+						WithHeaderTemplate(options.headerTemplate).WithFooterTemplate(options.footerTemplate).
+						WithMarginTop(options.marginTop).WithMarginBottom(options.marginBottom).
+						WithMarginLeft(options.marginLeft).WithMarginRight(options.marginRight)
+				}
+				data, _, err := command.Do(actionContext)
 				pdf = data
 				return err
 			}),

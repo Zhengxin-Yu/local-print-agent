@@ -11,15 +11,15 @@
 | 1. 启动 | 设置 `LOCAL_PRINT_AGENT_BROWSER_PATH` 后运行服务 | 发现 Chrome 131+，绑定第一个可用端口 | Chrome 151 通过版本检查；缺少浏览器时明确返回 `RENDERER_NOT_FOUND` |
 | 2. 探活 | `GET /health` | HTTP 200，`service=local-print-agent`、`api_version=v1`、`status=ok` | 真实服务集成测试返回 200 |
 | 3. 选打印机 | `GET /api/v1/printers` 并选择默认项 | 出现演示用 Fake Printer | 返回“Mock Printer（不执行实体打印）” |
-| 4. 提交气球 | 提交 `balloon_ticket` JSON | HTTP 202，生成 32 位小写十六进制 jobID | 真实服务生成 `97639780a12f2433c1d12dbb5c828ec0` |
+| 4. 提交气球 | 提交 `balloon_ticket` JSON | HTTP 202，生成 32 位小写十六进制 jobID | 真实服务生成 `09a23714981d6043aa7d682574188db3` |
 | 5. 状态变化 | 轮询任务详情 | `queued → rendering → printing → succeeded` | 端到端最终为 `succeeded`；状态顺序由 Worker 回归测试逐项断言 |
 | 6. 气球预览 | 打开 `/api/v1/print-jobs/{id}/preview` | HTTP 200、`application/pdf`，窄纸单页 | HTTP 200，PDF 可解析且为 1 页；Range 请求返回 206 |
-| 7. 提交源码 | 提交包含中文注释的长 C++ JSON | HTTP 202，源码被高亮并显示行号 | 真实服务生成 `364a4ffebd1e0ade6b7adb4287110d1a`并成功完成 |
-| 8. 源码预览 | 打开源码 preview | A4 多页，每页有页眉、行号和“第 n / N 页” | 验收 PDF 可解析为 6 页；第 1/2 页均提取到连续行号、页号与队伍/房间页眉文本 |
+| 7. 提交源码 | 提交包含中文注释的长 C++ JSON | HTTP 202，源码被高亮并显示行号 | 真实服务生成 `7056cddfeef0d09741416758f5628b01` 并成功完成 |
+| 8. 源码预览 | 打开源码 preview | A4 多页，每页有页眉、行号和“第 n / N 页” | 验收 PDF 可解析为 6 页；Chrome CDP 页眉/页脚位于显式上下边距内，第 1/2 页正文与页眉、页码均有可测空隙 |
 
 ## 真实 PDF 截图
 
-以 Chrome 151 `PrintToPDF` 生成 PDF，再用本地 Poppler `pdftoppm` 按 150 DPI 导出 PNG；未调用 GLM 视觉。本实现代理仅生成截图，由主代理直接做最终视觉复核。
+以 Chrome 151 `PrintToPDF` 生成 PDF，再用本地 Poppler `pdftoppm` 按 150 DPI 导出 PNG；未调用 GLM 视觉。本实现代理已直接查看三张 PNG：源码第 1/2 页的页眉分隔线均在正文上方，页码均在正文下方，旧版页底覆盖 56–59、116–120 行的问题不再出现。
 
 - 气球小票：![气球小票](assets/day-05-balloon.png)
 - 源码首页（中文注释、行号、页眉、页码）：![源码首页](assets/day-05-source-page-1.png)
@@ -40,6 +40,8 @@ API 提交时只提取两个文件的 `type`、`printer_name` 和 `payload`；`i
 $ LOCAL_PRINT_AGENT_CHROME_E2E=... go test -count=1 ./internal/render -run TestPDFRendererChromeIntegration -v
 Chromium major: 151
 source PDF pages: 6
+source page 1 geometry: header rule y=62, body y=139, footer y=1710, height=1754
+source page 2 geometry: header rule y=62, body y=127, footer y=1710, height=1754
 --- PASS: TestPDFRendererChromeIntegration
 ```
 
@@ -47,17 +49,18 @@ source PDF pages: 6
 
 ```text
 $ LOCAL_PRINT_AGENT_CHROME_E2E=... go test -count=1 ./cmd/local-print-agent -run TestRealServiceRendersBothJobsServesPreviewAndCleansUp -v
-service jobs: balloon=97639780a12f2433c1d12dbb5c828ec0 source=364a4ffebd1e0ade6b7adb4287110d1a
+service jobs: balloon=09a23714981d6043aa7d682574188db3 source=7056cddfeef0d09741416758f5628b01
 --- PASS: TestRealServiceRendersBothJobsServesPreviewAndCleansUp
 ```
 
-该集成测试还断言了：两任务均进入 `succeeded`；preview 为 HTTP 200/PDF；Range 为 206；取消上下文后服务优雅关闭；端口可重新绑定；新建 Chrome profile 全部清理。提交前的完整 `GOTOOLCHAIN=local go test -count=1 ./... -v` 通过（真实 Chrome 用例在默认套件中显式 skip，已用环境变量单独运行通过）；`go test -race` 关键包、`go vet ./...`、`go mod verify` 和 `git diff --check` 均通过。
+几何断言把真实 PDF 的第 1/2 页光栅化，定位页眉横线、正文首行和底部页码，要求页眉/正文与正文/页脚之间均有独立空隙。真实服务集成还断言：两任务均进入 `succeeded`；preview 为 HTTP 200/PDF；Range 为 206；取消上下文后服务优雅关闭；端口可重新绑定；新建 Chrome profile 全部清理。另有确定性生命周期测试在渲染进行中取消，验证 `running.Done` 必须等待 renderer 清理 profile 与 worker 退出。提交前的完整 `GOTOOLCHAIN=local go test -count=1 ./... -v` 通过（真实 Chrome/Poppler 用例为显式 opt-in，已单独运行）；`go test -race` 关键包、`go vet ./...`、`go mod verify` 和 `git diff --check` 均通过。
 
 ## 安全与失败行为
 
 - 浏览器显式路径必须存在且为普通文件；自动发现顺序为环境变量、PATH、Windows/Linux 常见安装路径。
 - Chrome 低于 131 或版本不可识别时返回 `RENDERER_VERSION_UNSUPPORTED`；对外消息不包含浏览器路径。
-- jobID 只接受 Service 生成的 32 位小写十六进制形式。HTML/PDF 在任务私有临时目录完成后再发布，失败时不留半成品。
+- jobID 只接受 Service 生成的 32 位小写十六进制形式。公开任务目录保持稳定；HTML/PDF 先写同目录临时文件并落盘，再用文件级原子替换发布，因此重试期间 Preview 始终读到完整旧版或新版 PDF。启动时会恢复旧实现崩溃遗留的 `.previous`。
+- Chromedp/文件暂存等运行期诊断仅保留在 Worker 内部错误流；持久化任务/API 只返回稳定的 `PDF rendering failed`，不包含浏览器、profile、dataDir 或 staging 路径。
 - preview 只从 Store 取 job 的 `PDFPath`，且必须精确对应 `<PreviewRoot>/<jobID>/preview.pdf`；路径清理、相对路径和 symlink/reparse 检查会阻止越界。
 - PDF 未就绪返回 409 `PREVIEW_NOT_READY`，任务不存在返回 404，篡改或越界路径返回不泄露细节的 500。
 - 本机 Windows 普通用户无创建 symlink 权限，symlink HTTP 测试如实标记为 skip；非symlink 的路径越界、错误文件名、store 篡改和 Range 测试均实际运行。

@@ -93,23 +93,32 @@ func startWithBuilder(ctx context.Context, cfg config.Config, builder func(confi
 		return nil, err
 	}
 	httpServer := &http.Server{Handler: application.Handler, ReadHeaderTimeout: 5 * time.Second}
+	serviceContext, cancelService := context.WithCancel(ctx)
+	httpDone := make(chan error, 1)
 	done := make(chan error, 1)
-	go application.worker.Run(ctx)
-	go consumeWorkerErrors(ctx, application.worker.Errors())
+	go application.worker.Run(serviceContext)
+	go consumeWorkerErrors(serviceContext, application.worker.Errors())
 	go func() {
 		err := httpServer.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
-		done <- err
+		cancelService()
+		httpDone <- err
 	}()
 	go func() {
-		<-ctx.Done()
+		<-serviceContext.Done()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownContext); err != nil {
 			log.Printf("HTTP shutdown failed")
 		}
+	}()
+	go func() {
+		err := <-httpDone
+		cancelService()
+		<-application.worker.Done()
+		done <- err
 	}()
 	return &runningServer{URL: fmt.Sprintf("http://%s:%d", cfg.Host, port), Done: done}, nil
 }

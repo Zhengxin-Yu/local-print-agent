@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -193,6 +194,61 @@ func TestWorkerRecordsRenderFailure(t *testing.T) {
 	failed := waitForStatus(t, store, job.ID, jobs.StatusFailed)
 	if failed.Error == nil || failed.Error.Code != jobs.ErrorCodeRenderFailed || failed.Error.Message == "" {
 		t.Fatalf("render failure = %#v, want non-empty RENDER_FAILED error", failed.Error)
+	}
+}
+
+func TestWorkerDoesNotPersistOrExposeRendererDiagnosticPaths(t *testing.T) {
+	job := queuedJob("render-secret")
+	store := newRecordingStore(job)
+	secret := `C:\private\data\jobs\render-secret\.render-123\render.html`
+	diagnostic := fmt.Errorf("chromedp navigate %s: target crashed", secret)
+	queue := make(chan string, 1)
+	w := worker.New(store, rendererFunc(func(context.Context, *jobs.Job) (string, error) { return "", diagnostic }), printer.NewFake(nil), queue)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+	queue <- job.ID
+
+	failed := waitForStatus(t, store, job.ID, jobs.StatusFailed)
+	if failed.Error == nil || failed.Error.Message != "PDF rendering failed" || strings.Contains(failed.Error.Message, secret) {
+		t.Fatalf("persisted renderer error = %#v, want stable path-free message", failed.Error)
+	}
+	select {
+	case observed := <-w.Errors():
+		if !errors.Is(observed, diagnostic) {
+			t.Fatalf("internal diagnostic = %v, want renderer cause", observed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not retain renderer diagnostic internally")
+	}
+}
+
+func TestWorkerDoneClosesOnlyAfterRunningRendererCleansUp(t *testing.T) {
+	job := queuedJob("cleanup")
+	store := newRecordingStore(job)
+	queue := make(chan string, 1)
+	entered := make(chan struct{})
+	cleanup := make(chan struct{})
+	w := worker.New(store, rendererFunc(func(ctx context.Context, _ *jobs.Job) (string, error) {
+		close(entered)
+		<-ctx.Done()
+		close(cleanup)
+		return "", ctx.Err()
+	}), printer.NewFake(nil), queue)
+	ctx, cancel := context.WithCancel(context.Background())
+	go w.Run(ctx)
+	queue <- job.ID
+	<-entered
+	cancel()
+	select {
+	case <-w.Done():
+		select {
+		case <-cleanup:
+		default:
+			t.Fatal("Worker.Done closed before renderer cleanup")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Worker.Done did not close after cancellation")
 	}
 }
 
