@@ -34,8 +34,15 @@
 
 ## 今日证据
 
-- 目录截图：最终演示前待补采集，未伪造截图。
-- `/health` 返回截图：最终演示前待补采集，未伪造截图。
+- 目录截图：本次工作树的实时目录证据快照；图中列出了用于本任务的 `cmd`、`internal`、`docs` 文件，来源命令和时间戳已写入图内。
+
+  ![第 1 天项目目录证据](assets/day-01-project-tree.png)
+
+- `/health` 返回截图：服务运行期间直接执行 HTTP GET 采集，图内记录命令、HTTP 200、JSON Content-Type 和原始响应体。
+
+  ![第 1 天 health 接口证据](assets/day-01-health.png)
+
+- 截图说明：两张 PNG 均由本次运行实时读取本机目录或本机服务返回后生成的命令输出快照；没有使用合成的响应内容。图内保留了来源、复现命令与采集时间。
 - 自动化验证命令：`go test ./... -v`。
 
   ```text
@@ -50,7 +57,9 @@
   {"service":"local-print-agent","api_version":"v1","status":"ok"}
   ```
 
-- 首个实现提交：`cd01ef53c763e8ba0de69184a14e0dcddde74aa8`（`feat: bootstrap local print agent health service`）。
+- 仓库首个提交：`dfd9a8de074b99da812ae7f0c879bc012e0bd495`（`chore: bootstrap repository for isolated development`）。
+- 功能实现提交：`cd01ef53c763e8ba0de69184a14e0dcddde74aa8`（`feat: bootstrap local print agent health service`）。
+- 第 1 天报告初始提交：`e955b1f4d70de8537694a0b4a21ea4b39b97a3b1`（`docs: add day 1 project report`）。
 
 ## 自检
 
