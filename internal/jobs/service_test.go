@@ -364,3 +364,43 @@ func TestServiceCreateCanceledContextDoesNotPersist(t *testing.T) {
 		t.Fatalf("Create() persisted %d jobs with canceled context", jobs.creates)
 	}
 }
+
+// This catches restart code that silently drops durable queued work when its
+// fixed-size worker queue cannot accept every recovered item.
+func TestServiceResumeQueuedEnqueuesInCreationOrderOrFailsBeforeDelivery(t *testing.T) {
+	t.Run("ordered delivery", func(t *testing.T) {
+		memory := newMemoryJobStore()
+		early := time.Date(2026, 8, 19, 9, 0, 0, 0, time.UTC)
+		late := early.Add(time.Minute)
+		for _, job := range []*Job{{ID: "later", Status: StatusQueued, CreatedAt: late}, {ID: "earlier", Status: StatusQueued, CreatedAt: early}, {ID: "failed", Status: StatusFailed, CreatedAt: early}} {
+			if err := memory.Create(context.Background(), job); err != nil {
+				t.Fatal(err)
+			}
+		}
+		queue := NewQueue()
+		count, err := NewService(memory, queue).ResumeQueued(context.Background())
+		if err != nil || count != 2 {
+			t.Fatalf("ResumeQueued() = %d, %v; want 2, nil", count, err)
+		}
+		if first, second := <-queue, <-queue; first != "earlier" || second != "later" {
+			t.Fatalf("recovery queue = %q, %q; want earlier, later", first, second)
+		}
+	})
+	t.Run("over capacity", func(t *testing.T) {
+		memory := newMemoryJobStore()
+		for index := 0; index <= QueueCapacity; index++ {
+			if err := memory.Create(context.Background(), &Job{ID: fmt.Sprintf("queued-%03d", index), Status: StatusQueued, CreatedAt: time.Unix(int64(index), 0)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		queue := NewQueue()
+		count, err := NewService(memory, queue).ResumeQueued(context.Background())
+		var jobErr *JobError
+		if count != 0 || !errors.As(err, &jobErr) || jobErr.Code != ErrorCodeQueueFull {
+			t.Fatalf("ResumeQueued() = %d, %v; want 0, QUEUE_FULL", count, err)
+		}
+		if len(queue) != 0 {
+			t.Fatalf("recovery partially delivered %d jobs", len(queue))
+		}
+	})
+}

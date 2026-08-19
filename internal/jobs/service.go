@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -164,6 +165,49 @@ func (s *Service) Retry(ctx context.Context, id string) (*Job, error) {
 		return nil, wrapStoreError("retry job", err)
 	}
 	return s.deliver(job, violation)
+}
+
+// ResumeQueued restores durable queued jobs to this process's private worker
+// queue after a restart. It verifies capacity before sending anything, so a
+// queue over 100 returns a visible error instead of silently losing work.
+func (s *Service) ResumeQueued(ctx context.Context) (int, error) {
+	if err := contextErr(ctx); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.store == nil {
+		return 0, &JobError{Code: ErrorCodeStore, Message: "job store is required"}
+	}
+	if s.queueInterfered() {
+		return 0, &JobError{Code: ErrorCodeQueueDeliveryFailed, Message: "worker queue ownership was interrupted"}
+	}
+	list, err := s.store.List(ctx)
+	if err != nil {
+		return 0, wrapStoreError("list queued jobs for recovery", err)
+	}
+	queued := make([]*Job, 0, len(list))
+	for _, job := range list {
+		if job != nil && job.Status == StatusQueued {
+			queued = append(queued, job)
+		}
+	}
+	sort.Slice(queued, func(i, j int) bool {
+		if queued[i].CreatedAt.Equal(queued[j].CreatedAt) {
+			return queued[i].ID < queued[j].ID
+		}
+		return queued[i].CreatedAt.Before(queued[j].CreatedAt)
+	})
+	if len(queued) > cap(s.queue)-len(s.queue) {
+		return 0, &JobError{Code: ErrorCodeQueueFull, Message: "too many queued jobs to restore to the worker queue"}
+	}
+	for _, job := range queued {
+		if !trySend(s.queue, job.ID) {
+			return 0, &JobError{Code: ErrorCodeQueueDeliveryFailed, Message: "queued job could not be restored to worker queue"}
+		}
+		s.deliveries++
+	}
+	return len(queued), nil
 }
 
 func (s *Service) queueInterfered() bool { return s.contractViolated || len(s.queue) > s.deliveries }

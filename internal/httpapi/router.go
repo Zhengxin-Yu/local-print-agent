@@ -2,9 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	"local-print-agent/internal/jobs"
@@ -37,6 +40,9 @@ func NewRouter(dependencies Dependencies) http.Handler {
 }
 
 func (r router) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	if corsForFileOrigin(w, request) {
+		return
+	}
 	if request.URL.Path == "/health" {
 		if request.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
@@ -68,32 +74,94 @@ func (r router) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	}
 
 	jobID, action, ok := jobRoute(request.URL)
-	if !ok {
+	if ok {
+		switch action {
+		case "":
+			if request.Method != http.MethodGet {
+				methodNotAllowed(w, http.MethodGet)
+				return
+			}
+			r.getJob(w, request, jobID)
+		case "preview":
+			if request.Method != http.MethodGet {
+				methodNotAllowed(w, http.MethodGet)
+				return
+			}
+			previewNotImplemented(w)
+		case "retry":
+			if request.Method != http.MethodPost {
+				methodNotAllowed(w, http.MethodPost)
+				return
+			}
+			r.retryJob(w, request, jobID)
+		default:
+			notFound(w)
+		}
+		return
+	}
+	r.serveWeb(w, request)
+}
+
+func corsForFileOrigin(w http.ResponseWriter, request *http.Request) bool {
+	if request.Header.Get("Origin") != "null" || (request.URL.Path != "/health" && !strings.HasPrefix(request.URL.Path, "/api/v1/")) {
+		return false
+	}
+	w.Header().Set("Access-Control-Allow-Origin", "null")
+	w.Header().Set("Vary", "Origin")
+	if request.Method != http.MethodOptions {
+		return false
+	}
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.WriteHeader(http.StatusNoContent)
+	return true
+}
+
+func (r router) serveWeb(w http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if r.dependencies.Web == nil {
 		notFound(w)
 		return
 	}
-	switch action {
-	case "":
-		if request.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		r.getJob(w, request, jobID)
-	case "preview":
-		if request.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		previewNotImplemented(w)
-	case "retry":
-		if request.Method != http.MethodPost {
-			methodNotAllowed(w, http.MethodPost)
-			return
-		}
-		r.retryJob(w, request, jobID)
+	name := ""
+	switch request.URL.Path {
+	case "/":
+		name = "index.html"
+	case "/app.js":
+		name = "app.js"
+	case "/styles.css":
+		name = "styles.css"
 	default:
 		notFound(w)
+		return
 	}
+	if path.Base(name) != name {
+		notFound(w)
+		return
+	}
+	file, err := r.dependencies.Web.Open(name)
+	if err != nil {
+		notFound(w)
+		return
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		notFound(w)
+		return
+	}
+	contentType := mime.TypeByExtension(path.Ext(name))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if request.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(contents)
 }
 
 // jobRoute accepts exactly one non-empty decoded job ID and an optional known
