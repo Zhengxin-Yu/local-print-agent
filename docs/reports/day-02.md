@@ -1,127 +1,75 @@
-# 课题三日常报告（第 2 天）：系统组成与技术选型
+# 课题三日常报告（第 2 天）
 
-## 基本信息与今日目标
+## 基本信息
 
-- 课题：浏览器通过 Go 回环服务调用本地打印能力。
-- 完成方式：独立完成。
-- 今日范围：只确定组件职责、技术依赖、任务模型和状态机，不实现 HTTP 页面或平台打印。
-- 今日目标：形成能够直接交给下一阶段编码的接口与验收基线。
+- 课题：浏览器调用本地打印机——竞赛气球小票与代码打印服务。
+- 成员：本人，独立完成需求分析、设计、编码、测试与文档。
+- 日期：第 2 天。
 
-## 系统组成
+## 今日目标
 
-```mermaid
-flowchart LR
-    Web[Web / 上游业务页面] --> API[HTTP API]
-    API --> Service[Job Service]
-    Service --> Store[(JSON Store)]
-    Service --> Queue[FIFO Queue]
-    Queue --> Worker[Single Worker]
-    Worker --> Renderer[HTML + Chrome PDF]
-    Worker --> Printer[Printer Adapter]
-    Printer --> Windows[Windows: SumatraPDF]
-    Printer --> Linux[Linux: CUPS]
-    Service --> API
-```
+确定系统由哪些部分组成、各部分如何衔接，并把第 1 天的六项必做逐条落实到具体模块。在此基础上比较本地服务、PDF 渲染和平台打印的可行方案，选出九天内能够实现、测试和说明边界的技术组合，为明日定义任务字段、状态机、错误码和接口提供依据。
 
-各组件只有一个主要职责：API 负责协议，Service 负责创建和重试，Store 负责持久化，Queue/Worker 负责顺序处理，Renderer 统一生成 PDF，Printer Adapter 隔离平台差异。CCPCOJ 只作为竞赛现场语境参考；由于其 API、鉴权和数据格式没有课程契约，本项目不假定任何对接细节。C-Lodop 只参与方案比较，不作为依赖。
+## 组成部分
 
-## 需求与验收映射
+| 名称 | 职责 | 输入 | 输出及上下游关系 | 负责人 |
+| --- | --- | --- | --- | --- |
+| Mock Web | 探测本地服务，提交气球或源码任务，展示队列与错误 | 用户填写的业务字段 | 向 HTTP API 发送 JSON，显示任务状态和预览入口 | 本人 |
+| HTTP API | 校验协议、限制请求大小、返回统一响应 | Web 的 HTTP/JSON 请求 | 将合法请求交给 Job Service，向 Web 返回任务或错误 | 本人 |
+| Job Service | 创建任务、生成 ID、处理失败重试 | 规范化后的创建或重试请求 | 写入 Store，并把任务 ID 送入 FIFO | 本人 |
+| JSON Store | 持久化任务及生命周期，支持重启恢复 | Job Service、Worker 的任务快照 | 为 API 查询和 Worker 处理提供一致数据 | 本人 |
+| FIFO 与 Worker | 容量 100，单线程按顺序驱动状态变化 | 排队中的任务 ID | 调用 Renderer 和 Printer Adapter，回写成功或失败 | 本人 |
+| Renderer | 将两类业务数据统一转成 PDF | 气球字段或语言与源码 | 向 Worker 返回固定任务目录中的 preview PDF | 本人 |
+| Printer Adapter | 枚举目标并提交 PDF，隔离平台差异 | 打印机名与 preview PDF | Windows 调用 SumatraPDF，Linux 调用 CUPS；结果回到 Worker | 本人 |
+| 文档与脚本 | 提供启动、接口、测试和演示依据 | 代码现状与验证结果 | README、双平台脚本、API 文档和日报 | 本人 |
 
-| 项目范围 | 对应组件 | 后续验收动作 | 成功结果 |
-| --- | --- | --- | --- |
-| 气球小票与源码打印 | API、Service、Renderer | 分别提交固定 JSON，读取 preview | 气球为窄纸单页；源码有高亮、行号、换行和分页 |
-| FIFO 队列 | Service、Queue、Worker | 连续提交多任务并记录处理顺序 | 顺序与提交顺序一致，单 Worker 无重叠 |
-| 五状态与重试 | Job、Service、Worker | 执行成功、渲染失败、打印失败和重试 | 只允许文档化迁移；失败保留稳定原因 |
-| Windows/Linux 边界 | Printer Adapter | 分别验证命令、枚举和可控系统队列 | 受控命令与真实队列证据分开记录 |
-| 可复现交付 | README、脚本、文档 | 在干净副本按 README 启动 | 能探活、创建任务、查询状态并预览 PDF |
+数据主路径为：Web → HTTP API → Job Service → Store/FIFO → Worker → Renderer → Printer Adapter → Store → Web。各部分通过任务对象和小型接口连接，后续可以替换渲染器或平台命令而不改变上层 API。
 
-## 技术方案比较与结论
+## 与需求的对应
+
+| 第 1 天必做 | 承担部分 | 对应方式与后续验收 |
+| --- | --- | --- |
+| 气球小票 | Web、API、Renderer | 接收比赛、队伍、房间、题号、颜色和时间；验收窄纸单页、中文和字段一致 |
+| 源代码打印 | Web、API、Renderer | 接收语言与原始源码；验收高亮、行号、长行换行、中文注释和多页页码 |
+| 队列、状态、失败与重试 | Job Service、Store、FIFO/Worker | 使用 `queued → rendering → printing → succeeded`，失败进入 `failed`；验收 FIFO、稳定错误码和失败重试 |
+| 本地接口与页面 | Mock Web、HTTP API | 提供探活、打印机、创建、列表、详情、预览和重试；验收服务未启动时明确提示 |
+| Windows/Linux 边界 | Printer Adapter | 统一接收 PDF，分别适配 SumatraPDF 和 CUPS；受控命令与系统队列证据分开记录 |
+| 可复现交付 | 文档与脚本 | 提供 README、双平台入口、接口说明、测试说明和演示脚本；用干净副本启动核对 |
+
+六项需求均有承担部分，没有“需求无人负责”或只画框图却没有输入输出的问题。跨模块规则由统一 Job 对象、五状态和稳定错误对象承接；尚未确定的字段细节放到明日接口约定中解决。
+
+## 技术选型
 
 ### 本地服务
 
-| 方案 | 优点 | 主要限制 | 结论 |
-| --- | --- | --- | --- |
-| 自研 Go 服务 | 队列、状态、错误和平台边界可控；便于单文件交付 | 需要自行实现存储和适配层 | 选择 |
-| 页面直接调用系统命令 | 原型快 | 浏览器无法安全统一执行；没有队列和状态 | 不选择 |
-| Go + C-Lodop | 可利用既有桌面打印产品 | 引入外部依赖，且不能替代课程要求的服务契约 | 不选择 |
-
-选择自研 Go 服务，并固定只监听回环地址。系统命令只能由 Adapter 用参数数组调用，不能替代本地服务或由页面拼接。
-
-### 渲染
-
-| 方案 | 优点 | 主要限制 | 结论 |
-| --- | --- | --- | --- |
-| 纯文本直接打印 | 实现简单 | 难以稳定实现票据、高亮和分页 | 不选择 |
-| HTML + Chroma + Chromedp | 模板、CSS 和高亮能力完整；两平台统一输出 PDF | 需要受控 Chrome/Chromium | 选择 |
-| 纯 Go PDF 库 | 可减少浏览器依赖 | 复杂文本布局、语法高亮和分页需自行实现 | 不选择 |
-
-Chroma 负责源码高亮，HTML 模板负责业务版式，Chromedp 将两类页面固化为 PDF。平台 Adapter 因此只处理同一种 PDF 输入。
-
-### 打印适配
-
-| 环境 | 方案 | 本阶段证据要求 |
+| 方案 | 优点 | 放弃或入选理由 |
 | --- | --- | --- |
-| Windows | SumatraPDF 静默提交 | 先验证参数、allowlist 和错误；再在安全目标上补系统队列证据 |
-| Linux | CUPS 的 `lp`/`lpstat` | 先验证解析和参数；再在 Linux runtime 补 request id 与队列证据 |
-| 自动测试与默认演示 | Fake Printer | 可重复模拟成功/失败，并明确“不执行实体打印” |
+| 自研 Go 回环服务 | 单文件、跨平台，队列、状态和错误可控 | 入选；最直接覆盖课程主路径 |
+| 页面直接调用系统命令 | 原型简单 | 放弃；浏览器安全模型不允许统一执行，也没有队列和状态 |
+| Go 加 C-Lodop | 可利用现成打印产品 | 放弃；增加外部依赖，且不能替代本项目需要展示的任务服务 |
 
-## 任务对象与状态机
+### PDF 渲染
 
-```json
-{
-  "id": "32位小写十六进制任务ID",
-  "type": "balloon_ticket",
-  "printer_name": "front-desk",
-  "payload": {
-    "team_name": "Team Atlas",
-    "problem_id": "A",
-    "solved_at": "2026-08-19T09:30:00+08:00"
-  },
-  "status": "queued",
-  "attempts": 0,
-  "created_at": "2026-08-19T09:30:05+08:00",
-  "updated_at": "2026-08-19T09:30:05+08:00"
-}
-```
+| 方案 | 优点 | 放弃或入选理由 |
+| --- | --- | --- |
+| HTML + Chroma + Chromedp | CSS 适合票据，Chroma 支持高亮，Chrome 能稳定输出 PDF | 入选；两类业务可共用渲染流程 |
+| 纯 Go PDF 库 | 不依赖浏览器 | 备选；复杂高亮、换行和分页需要自行实现，九天风险较高 |
+| 纯文本直接打印 | 实现最快 | 放弃；无法满足版式、高亮和预览验收 |
 
-```mermaid
-stateDiagram-v2
-    [*] --> queued
-    queued --> rendering
-    rendering --> printing
-    rendering --> failed
-    printing --> succeeded
-    printing --> failed
-    failed --> queued: retry
-    succeeded --> [*]
-```
+### 平台打印
 
-进入 `rendering` 时写入 `started_at` 并令 `attempts + 1`；进入成功或失败终态时写入 `finished_at`；失败重试回到 `queued` 时清理上次运行时间和旧错误。错误统一为 `{"code":"RENDER_FAILED","message":"PDF rendering failed"}` 形式，对外使用稳定大写错误码。
+比较“各业务直接调用系统命令”和“统一 Printer Adapter”。前者代码少，但气球与源码会重复处理枚举、超时、错误和路径安全；后者让 Worker 永远只提交 PDF，Windows 使用 SumatraPDF，Linux 使用 `lp/lpstat`。因此选择 Adapter，并保留明确的 Fake Printer 供自动测试和安全演示；Fake 成功不代表系统队列或物理出纸。
 
-## 今日完成与验收
+## 今日完成与自检
 
-| 前提 | 操作 | 预期结果 | 实际结果与结论 |
-| --- | --- | --- | --- |
-| 新建任务为 `queued` | 依次执行合法状态迁移 | 只能到 `rendering -> printing -> succeeded` | 状态机测试通过 |
-| 任务处于不允许的状态 | 尝试跳级、倒退或重复完成 | 返回 `INVALID_TRANSITION`，原状态不变 | 三类非法路径测试通过 |
-| 失败任务发起重试 | 执行 `failed -> queued` | 清理旧错误和运行时间；下一次渲染才增加 attempts | 生命周期测试通过 |
-| 需要选择实现方案 | 对服务、渲染和打印分别比较候选 | 每项均有选择理由、依赖与后续验收方式 | 已形成本文三张选型表 |
+今日已确定八个组成部分、完整数据流、六项需求映射以及三组选型结论；同时确定容量 100 的单 Worker FIFO、五状态、统一 PDF 中间产物和平台 Adapter 边界。自检后未发现无人承担的必做项，组件均有明确输入、输出和后续验收方式。
 
-新增状态机测试初次运行时，因为 `CanTransition`、`Transition`、生命周期字段和 `JobError` 尚未实现而编译失败；完成实现后运行：
+仍未确定的是创建请求的精确字段、错误码全集、Store/Renderer/Adapter 的方法签名，以及重启时中断任务如何处理。这些属于明日接口和数据约定，不提前写成已实现。Windows 系统队列与 Linux/CUPS 运行也仍是后续环境验收，不以选型结论代替。
 
-```text
-go test ./internal/jobs -run 'Test(CanTransition|Transition)' -v
-PASS
-```
+## 问题、计划与 AI 沟通
 
-实现提交：`098ceb2d57f1c362d553c40288147a3d6929b912`（`feat: define print job model and state machine`）。
+不成功的沟通：最初只请 AI“生成浏览器打印服务的完整架构”，回复加入了账号、数据库、多打印机调度和远程服务，虽然内容完整，但超过九天范围，也无法逐项对应第 1 天必做。随后删除无关模块，并要求所有组成必须说明输入、输出和对应需求。
 
-## 问题、AI 沟通与自检
+比较有效的沟通：把第 1 天六项必做、明确不做项、独立完成、九天周期和“受控命令不等于真实打印”的验收边界一起提供，再要求按“方案、优点、限制、结论”比较。得到的内容能够直接收敛到 Go 服务、HTML 转 PDF 和双平台 Adapter，且未假定 CCPCOJ 的未知接口。
 
-主要问题是容易根据 CCPCOJ 或 C-Lodop 的公开形态猜测本项目接口，导致范围扩张。本日要求 AI 只比较可验证的架构特征，并明确“没有课程契约就不得假定上游 API、鉴权和数据格式”。这个约束使选型报告保留借鉴价值，又不会把未知集成写进必做范围。
-
-自检结果：每项必做都能映射到组件和后续验收；状态名、生命周期字段和错误对象已经可以直接交给 Store、Service 和 Worker 使用；尚未完成的 HTTP、Web、真实渲染和平台队列没有写成今日成果。
-
-## 明日计划
-
-交付 JSON Store、容量 100 的 FIFO、Job Service、单 Worker、Fake Renderer 和 Fake Printer；用两条确定性测试记录成功状态全序列与渲染/打印失败序列，并说明服务重启和重复打印边界。
+明日安排：定义 Job 字段、创建请求和统一错误对象；冻结五状态合法迁移；确定 Job Store、Renderer、Printer Adapter 的接口；实现 JSON Store、FIFO、Fake Renderer 和 Fake Printer，并用成功、渲染失败和打印失败三条序列自检。
