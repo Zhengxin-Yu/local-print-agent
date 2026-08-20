@@ -1,21 +1,22 @@
-# 第3天：主路径对象、成功失败约定与假实现
+# 课题三日常报告（第 3 天）：任务主路径与失败契约
 
-## Job 字段
+## 基本信息与今日目标
 
-| 字段 | 来源 | 用途 | 示例 |
-|---|---|---|---|
-| `id` | Service 的 crypto/rand 128-bit 生成器 | 稳定任务标识及队列消息 | 32 位十六进制字符串 |
-| `type` | 已规范化的创建请求 | 选择渲染模板 | `source_code` |
-| `printer_name` | 已规范化的创建请求 | 操作系统打印目标 | `front-desk` |
-| `payload` | 已规范化的 JSON 请求体 | 渲染内容 | `{"language":"go",...}` |
-| `status` | Service/Worker 状态机 | 生命周期展示与重试判断 | `queued` |
-| `error` | Worker 或 Service | 稳定错误码和可读原因 | `PRINT_COMMAND_FAILED` |
-| `created_at` / `updated_at` | Service/状态迁移 | 排序与审计 | RFC3339 时间 |
-| `started_at` / `finished_at` | Worker 状态迁移 | 本次尝试的运行区间 | RFC3339 时间 |
-| `attempts` | 进入 `rendering` 时递增 | 重试计数 | `1` |
-| `pdf_path` | Renderer 返回 | 传给打印适配器的暂存 PDF | `data/jobs/<jobID>/preview.pdf` |
+- 课题：浏览器调用本地打印机。
+- 完成方式：独立完成。
+- 今日范围：完成任务存储、队列、Worker 和可注入假实现；不接 HTTP 页面和真实平台命令。
+- 今日目标：打通“创建任务 -> FIFO 处理 -> 成功/失败持久化”的确定性主路径。
 
-## 接口
+## 核心对象与接口
+
+| Job 字段 | 来源 | 用途 |
+| --- | --- | --- |
+| `id` | Service 使用 `crypto/rand` 生成 | 32 位小写十六进制稳定任务标识 |
+| `type`、`printer_name`、`payload` | 规范化后的创建请求 | 选择模板、打印目标和业务内容 |
+| `status`、`error` | Service/Worker | 状态展示、失败诊断与重试判断 |
+| `created_at`、`updated_at` | Service/状态迁移 | 排序与审计 |
+| `started_at`、`finished_at`、`attempts` | Worker 状态迁移 | 记录每次尝试的生命周期 |
+| `pdf_path` | Renderer | 将固定预览文件交给 Printer Adapter |
 
 ```go
 type JobStore interface {
@@ -35,49 +36,71 @@ type Adapter interface {
 }
 ```
 
-## 成功与失败约定
+Store、Renderer 和 Adapter 均以接口隔离，Worker 不需要知道 JSON 文件、Chrome、SumatraPDF 或 CUPS 的内部实现。Fake Renderer 只生成可识别的临时 PDF；Fake Printer 只线程安全记录调用并允许注入错误，两者都不声称已经进入系统队列。
 
-成功只表示操作系统适配器已接受 PDF 打印命令，状态为 `succeeded`；不等同于纸张已经实际输出。物理出纸须由后续硬件/人工记录处理。
+## 主路径与失败约定
 
-| 场景 | 错误码 | 用户可读原因 | 任务保留 | 可重试 |
-|---|---|---|---|---|
-| 请求不合法 | `INVALID_REQUEST` | 校验失败详情 | 否 | 修正请求后新建 |
-| 等待队列满 | `QUEUE_FULL` | `print queue is full` | Create 否；Retry 保持 failed | 是 |
-| 队列交付契约被破坏 | `QUEUE_DELIVERY_FAILED` | 已持久化但无法安全投递 ID | Create/Retry 已是 queued | 需人工恢复队列后处理 |
-| 渲染失败 | `RENDER_FAILED` | Renderer 原因 | 是 | 是 |
-| 打印命令失败 | `PRINT_COMMAND_FAILED` | Adapter 原因 | 是 | 是 |
-| 非失败状态重试 | `RETRY_NOT_ALLOWED` | `only failed jobs can be retried` | 是 | 否 |
-| 存储/取消 | `STORE_ERROR` / `CONTEXT_CANCELED` | 保留底层可诊断原因 | 视持久化结果 | 视状态 |
-
-`Fake Renderer` 只在测试中生成临时 PDF 文件；`Fake Printer` 只线程安全地记录 `Print` 调用并可注入错误。二者绝不声称已真实打印。
-
-## 状态时序（测试内存 history 断言摘要）
+单 Worker 从容量 100 的 FIFO 中逐个取任务 ID：
 
 ```text
-TestWorkerProcessesQueuedJobThroughSuccessfulFIFOStates
+queued
+  -> 持久化 rendering，attempts + 1
+  -> Renderer 生成 PDF
+  -> 持久化 pdf_path 和 printing
+  -> Adapter 接受调用
+  -> 持久化 succeeded
+```
+
+| 场景 | 稳定错误码 | 任务是否保留 | 后续动作 |
+| --- | --- | --- | --- |
+| 请求不合法 | `INVALID_REQUEST` | 否 | 修正输入后新建 |
+| 新任务遇到队列满 | `QUEUE_FULL` | 否 | 队列释放后重新提交 |
+| 已持久化任务无法安全投递 ID | `QUEUE_DELIVERY_FAILED` | 是，保持 `queued` | 修复队列后恢复处理 |
+| 渲染失败 | `RENDER_FAILED` | 是，进入 `failed` | 可重试 |
+| 打印命令失败 | `PRINT_COMMAND_FAILED` | 是，进入 `failed` | 可重试 |
+| 非失败任务请求重试 | `RETRY_NOT_ALLOWED` | 是，状态不变 | 不允许 |
+| 存储或取消 | `STORE_ERROR` / `CONTEXT_CANCELED` | 取决于持久化阶段 | 保留可诊断边界 |
+
+成功只表示当前 Adapter 接受 PDF 调用，不等同于操作系统队列一定完成，更不等同于纸张已经输出。
+
+## 重启恢复与重复提交边界
+
+JSON Store 能在重新打开后恢复任务。服务重启时，仍处于 `rendering` 或 `printing` 的任务被标记为 `failed`，错误为 `SERVICE_RESTARTED`，之后可以人工重试；尚未开始的 `queued` 任务保持排队状态。
+
+运行期间，如果 Adapter 已返回成功而最终 `succeeded` 持久化暂时失败，Worker 只重试写入状态，不再次调用 `Print`。但进程可能恰好在操作系统接受命令之后、状态持久化之前崩溃；重启后人工重试可能再次提交同一 PDF。因此平台提交是 **at-least-once**，当前范围不承诺 exactly-once。
+
+## 今日验收
+
+| 前提 | 操作 | 预期结果 | 实际结果与结论 |
+| --- | --- | --- | --- |
+| 顺序创建两个合法任务 | 启动单 Worker 消费队列 | 两任务按 FIFO 依次走完四个运行状态，无并发重叠 | 通过 history 断言 |
+| Renderer 注入错误 | 消费 `queued` 任务 | `queued -> rendering -> failed`，保留 `RENDER_FAILED` | 通过 |
+| Printer 注入错误 | 让渲染成功、打印失败 | `queued -> rendering -> printing -> failed`，保留 `PRINT_COMMAND_FAILED` | 通过 |
+| 队列已满 | 创建第 101 个任务 | 返回 `QUEUE_FULL`，新任务不落库 | 通过 Service 测试 |
+| Store 中存在中断状态 | 重新打开并执行恢复 | rendering/printing 改为 failed，可再次重试 | 通过持久化恢复测试 |
+| Adapter 已调用、最终状态写入暂时失败 | 重试最终持久化 | 不重复调用 Adapter | 通过 Worker 重试契约 |
+
+成功序列的测试摘要：
+
+```text
 first:  queued -> rendering -> printing -> succeeded
 second: queued -> rendering -> printing -> succeeded
 PASS
 ```
 
-Worker 单 goroutine 逐个取 FIFO ID，先持久化 `rendering`（并增加 attempts），再渲染；随后持久化 PDF 路径与 `printing`，最后提交打印命令并持久化 `succeeded`。
+## 问题处理与 AI 沟通
 
-## JSON 恢复与服务重启
+| 问题 | 处理结果 |
+| --- | --- |
+| 并发创建可能竞争 | Service 串行化 Create/Retry；Store 和 Fake Printer 各自加锁。 |
+| 队列满时可能出现“已落库但未排队” | Create 在持久化前检查容量；Retry 队列满时保持 `failed`。 |
+| 最终状态写入失败可能导致重复打印 | 进程内只重试状态写入；崩溃窗口单独记录为 at-least-once 风险。 |
+| 重启时任务状态含糊 | 中断运行态统一转为 `failed/SERVICE_RESTARTED`，允许显式重试。 |
 
-`JSONStore` 的恢复测试覆盖持久化后重新打开，以及 `RecoverInterrupted`：重启时仍处于 `rendering` 或 `printing` 的任务改为 `failed`，使用 `SERVICE_RESTARTED` 说明原因，之后可通过 Service 的 Retry 再入队。将尚未开始的 `queued` 任务重新入队属于后续启动接线，本日尚未实现；Worker 本身不关闭队列，也不会将“操作系统已接受”误报为物理出纸完成。
+本日与 AI 沟通中最重要的修正，是拒绝“加一个幂等判断即可保证绝不重复打印”的宽泛建议。沿着 Adapter 调用与状态落盘的时间顺序检查后，确认进程崩溃窗口无法仅靠内存状态消除，因此报告改为准确的 at-least-once 说明，并把是否重试交给可观察状态和人工判断。
 
-## 命令提交的 at-least-once 边界
+## 自检与明日计划
 
-运行期中，`succeeded` 持久化失败会重试同一快照，绝不会再次调用 `Print`。但进程可能在操作系统已经接受 `Print` 命令、而 `succeeded` 尚未持久化的窗口崩溃；重启恢复后 Retry 可能再次提交同一 PDF。因此 OS 命令提交是 **at-least-once**，而非 exactly-once，不能由当前进程内逻辑消除该崩溃窗口。
+今日已完成 Store、FIFO、Service、Worker 和两类 Fake 边界；成功、渲染失败、打印失败、队列满和重启恢复均有确定性测试。HTTP API、浏览器页面、真实 HTML/PDF 和平台命令仍未接入。
 
-## 今日问题与处理
-
-| 问题 | 处理 |
-|---|---|
-| 并发访问 | Service 互斥串行化 Create/Retry；Store/Fake Printer 各自加锁。 |
-| 重复打印 | 运行期的最终持久化重试不重复 Print；崩溃窗口仍是 at-least-once，Retry 可能重复提交。 |
-| 队列满 | 固定容量 100，Service 发送前检查容量；Create 不落库，Retry 不改变 failed 状态。 |
-
-## 明日计划
-
-实现 HTTP API、Mock Web，以及创建、列表、详情、重试和任务状态页面。
+明日交付 7 个 HTTP 路由的初版、统一响应 envelope、嵌入式 Mock Web，以及创建、列表、详情、重试和任务状态展示；同时提交一张真实运行页面截图，并明确 preview 与 Fake Printer 的未实现边界。
