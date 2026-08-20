@@ -153,10 +153,16 @@ func TestSubmissionDocumentsUseRelativeFilePaths(t *testing.T) {
 func excludedMarkdownDirectory(name string) bool {
 	lower := strings.ToLower(name)
 	switch lower {
-	case ".git", ".cache", "data", "node_modules", "vendor":
+	case ".git", ".cache", ".worktrees", "data", "node_modules", "vendor":
 		return true
 	default:
 		return strings.HasPrefix(lower, ".tmp-")
+	}
+}
+
+func TestExcludedMarkdownDirectorySkipsGitWorktrees(t *testing.T) {
+	if !excludedMarkdownDirectory(".worktrees") {
+		t.Fatal(".worktrees must be excluded from submission document scans")
 	}
 }
 
