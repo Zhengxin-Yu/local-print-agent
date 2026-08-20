@@ -1,0 +1,14 @@
+{
+  "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "type": "balloon_ticket",
+  "printer_name": "front-desk",
+  "payload": {
+    "contest_name": "比赛名",
+    "team_id": "team001",
+    "team_name": "Team Atlas",
+    "room": "A101",
+    "problem_id": "C",
+    "balloon_color": "red",
+    "solved_at": "2026-08-19T09:30:00+08:00"
+  }
+}

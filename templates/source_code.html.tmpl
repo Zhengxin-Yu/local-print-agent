@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="local-print-agent-minimum-chrome-major" content="{{.MinimumChromeMajor}}">
+<title>源码打印 {{.JobID}}</title>
+<style>
+@page {
+  size: A4;
+}
+* { box-sizing: border-box; }
+body { color: #161616; font-family: "Cascadia Mono", Consolas, "Liberation Mono", monospace; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+pre.chroma { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; tab-size: 4; font-size: 8.5pt; line-height: 1.4; }
+.chroma { color: #24292e; background-color: #fff; }
+.chroma .line { display: flex; align-items: flex-start; }
+.chroma .ln { flex: none; color: #6a737d; padding-right: 1em; user-select: none; }
+.chroma .cl { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.chroma .k, .chroma .kd, .chroma .kn { color: #d73a49; font-weight: bold; }
+.chroma .s, .chroma .s1, .chroma .s2 { color: #032f62; }
+.chroma .c, .chroma .c1, .chroma .cm { color: #6a737d; font-style: italic; }
+.chroma .nf, .chroma .nx { color: #6f42c1; }
+</style>
+</head>
+<body>
+<main>{{.HighlightedCode}}</main>
+</body>
+</html>

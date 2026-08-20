@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>本地打印代理控制台</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><h1>本地打印代理</h1><p>本地控制台 · 演示模式与 platform 模式</p></div>
+    <dl class="connection" aria-live="polite">
+      <div><dt>连接</dt><dd id="connection-status">正在检查…</dd></div>
+      <div><dt>API 版本</dt><dd id="api-version">—</dd></div>
+      <div><dt>端口</dt><dd id="service-port">—</dd></div>
+    </dl>
+  </header>
+  <main>
+    <p id="page-error" class="notice error" role="alert" hidden></p>
+    <section class="panel setup" aria-labelledby="printer-title">
+      <h2 id="printer-title">打印机</h2>
+      <label for="printer-select">选择目标打印机</label>
+      <select id="printer-select" required><option value="">正在加载打印机…</option></select>
+      <p id="printer-hint" class="hint">演示模式使用 Mock Printer，不执行实体打印；platform 模式会向所选操作系统队列提交打印，使用前必须确认安全目标。</p>
+    </section>
+    <section class="form-grid" aria-label="新建打印任务">
+      <form id="balloon-form" class="panel" novalidate>
+        <h2>气球小票</h2>
+        <label for="balloon-team-name">队伍名称</label><input id="balloon-team-name" name="team_name" required autocomplete="off">
+        <label for="balloon-problem-id">题目编号</label><input id="balloon-problem-id" name="problem_id" required placeholder="例如 A">
+        <label for="balloon-solved-at">通过时间</label><input id="balloon-solved-at" name="solved_at" type="datetime-local" required>
+        <button type="submit">创建气球小票任务</button>
+      </form>
+      <form id="source-form" class="panel" novalidate>
+        <h2>源码打印</h2>
+        <label for="source-language">语言</label>
+        <select id="source-language" name="language"><option value="cpp">C++</option><option value="go">Go</option><option value="python">Python</option><option value="java">Java</option></select>
+        <label for="source-code">源码</label><textarea id="source-code" name="source_code" required minlength="6" spellcheck="false" placeholder="至少 6 个字符"></textarea>
+        <button type="submit">创建源码打印任务</button>
+      </form>
+    </section>
+    <section class="panel" aria-labelledby="jobs-title">
+      <div class="section-heading"><div><h2 id="jobs-title">打印任务</h2><p class="hint">每 2 秒自动刷新，最新任务在前。</p></div><button id="refresh-jobs" type="button">立即刷新</button></div>
+      <div class="scroll"><table><thead><tr><th>创建时间</th><th>类型</th><th>打印机</th><th>状态</th><th>失败原因</th><th>操作</th></tr></thead><tbody id="jobs-body"><tr><td colspan="6">正在加载任务…</td></tr></tbody></table></div>
+    </section>
+    <section class="panel" aria-labelledby="detail-title">
+      <h2 id="detail-title">任务详情</h2><p id="job-detail" class="hint">选择“详情”查看任务。</p>
+    </section>
+  </main>
+  <script src="app.js" defer></script>
+</body>
+</html>

@@ -1,1 +1,7 @@
 .worktrees/
+data/
+.cache/
+/.tmp-chrome-screenshot-profile/
+/.tmp-go-cache/
+/.tmp-*-gocache/
+/.tmp-*.test
