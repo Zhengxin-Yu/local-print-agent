@@ -1,70 +1,87 @@
-# 第4天：环境起步、启动说明、目录职责与审查
+# 课题三日常报告（第 4 天）：HTTP API 与 Mock Web 闭环
 
-## 启动与预期结果
+## 基本信息与今日目标
 
-在仓库根目录运行：
+- 完成方式：独立完成。
+- 今日范围：接通 HTTP API、嵌入式页面和 Day 3 的任务流水线；渲染和打印仍使用明确标识的 Fake。
+- 今日目标：让使用者能从浏览器完成探活、创建两类任务、查看状态和重试，为真实 PDF 渲染提供稳定上层入口。
+
+## 今日交付
+
+项目已形成可运行的纵向切片：
+
+```text
+启动脚本 -> 回环 HTTP 服务 -> 嵌入式 Mock Web -> Job Service
+-> FIFO Worker -> Fake Renderer -> Fake Printer -> 状态回写
+```
+
+目录职责也已固定：`internal/httpapi` 负责协议和路由，`internal/jobs` 负责业务状态，`internal/store` 负责 JSON 持久化，`internal/worker` 负责顺序处理，`web` 只负责调用 API 和展示结果。网页不承担队列、渲染或打印逻辑。
+
+## API 契约
+
+| 方法 | 路径 | 作用 | 成功 | 主要失败 |
+| --- | --- | --- | --- | --- |
+| GET | `/health` | 探活与服务识别 | 200 | 405 |
+| GET | `/api/v1/printers` | 枚举当前 Adapter 打印机 | 200 | 500、503 |
+| POST | `/api/v1/print-jobs` | 创建气球或源码任务 | 202 | 400、413、415、500、503 |
+| GET | `/api/v1/print-jobs` | 查询队列全貌 | 200 | 500、503 |
+| GET | `/api/v1/print-jobs/{id}` | 查询任务详情 | 200 | 404、500、503 |
+| POST | `/api/v1/print-jobs/{id}/retry` | 重试失败任务 | 200 | 404、409、500、503 |
+| GET | `/api/v1/print-jobs/{id}/preview` | 读取生成 PDF | 本日未实现 | 501 |
+
+所有 JSON 响应使用统一 envelope；创建接口要求 `application/json`、限制 1 MiB 并拒绝未知字段。重试只允许 `failed`，不能把成功任务重复排队。
+
+## 启动与页面
+
+Windows：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run-windows.ps1
 ```
 
+Linux：
+
 ```bash
 bash ./scripts/run-linux.sh
 ```
 
-终端会输出类似 `local-print-agent listening on http://127.0.0.1:17653`。打开该 URL 后，`GET /health` 返回服务、版本和状态；页面显示一个 Mock Printer。创建气球或源码任务后，任务会显示为成功；Fake Printer 只记录命令，不会产生实体打印。
+服务会在 `17653-17660` 中绑定第一个可用端口并输出 URL。打开该 URL 后，页面自动确认 health 标识、显示 “Mock Printer（不执行实体打印）”、提供两类表单并每两秒刷新任务列表。
 
-## 目录职责
+真实运行页面如下：
 
-```text
-cmd/local-print-agent/      可执行程序装配、端口监听和优雅关闭
-internal/config/            本地监听与数据目录配置
-internal/httpapi/           版本化 JSON API、CORS 和嵌入网页路由
-internal/jobs/              任务模型、验证、状态流转及安全恢复入队
-internal/printer/           打印机适配器接口和无实体输出的 Fake
-internal/render/            渲染器接口和可识别的假 PDF 输出
-internal/server/            候选端口监听
-internal/store/             JSON 持久化与中断任务恢复
-internal/worker/            FIFO 工作器和重试处理
-web/                         嵌入式单页控制台资源
-scripts/                     Windows/Linux 从仓库根启动入口
-docs/reports/                每日说明、审查记录和截图
-```
+![第 4 天 Mock 控制台](assets/day-04-console.png)
 
-## API
+## 今日验收
 
-| 方法 | 路径 | 输入 | 成功 | 失败 |
-| --- | --- | --- | --- | --- |
-| GET | `/health` | 无 | 200 | 405 |
-| GET | `/api/v1/printers` | 无 | 200 | 500、503 |
-| GET | `/api/v1/print-jobs` | 无 | 200 | 503、500 |
-| POST | `/api/v1/print-jobs` | `type`、`printer_name`、`payload` | 202 | 400、415、413、503、500 |
-| GET | `/api/v1/print-jobs/{id}` | 路径 ID | 200 | 404、503、500 |
-| POST | `/api/v1/print-jobs/{id}/retry` | 路径 ID | 200 | 404、409、503、500 |
-| GET | `/api/v1/print-jobs/{id}/preview` | 路径 ID | — | 501（当前未实现） |
+| 前提 | 操作 | 预期结果 | 实际结果与结论 |
+| --- | --- | --- | --- |
+| 服务以默认模式启动 | 打开根 URL | 页面加载并识别本服务，打印机明确标识不实体打印 | 通过，见页面截图 |
+| 输入合法气球或源码 JSON | 点击创建并观察任务列表 | HTTP 202；生成唯一 ID；最终显示 `succeeded` | 通过 Fake 端到端测试 |
+| 输入未知字段、错误类型或超大请求 | 调用创建接口 | 分别返回稳定 400/415/413，不创建任务 | 通过 API 测试 |
+| 任务处于 `failed` | 点击重试 | 清理错误后重新排队；其他状态返回 409 | 通过 Service/API 测试 |
+| 请求 preview | 打开任务预览 | 因真实 Renderer 尚未接入，明确返回 501 | 与本日范围一致 |
+| 第一个端口被占用 | 启动并由页面探测 | 服务回退下一端口，页面按同一候选段发现 | 通过监听与 Web 契约测试 |
 
-Day 4 初版曾仅凭 `Origin: null` 开放 GET、POST 和 `Content-Type` 预检。最终安全审查已加固：默认使用嵌入式同源页面；可选 `file://` 页面还必须为每个 health/API/preview URL 携带本次启动在本地终端输出的随机能力值，缺失或错误值不获得 CORS，普通网页 Origin 也不授权。
+## Fake 边界与安全审查
 
-## 页面截图
+Fake Renderer 生成可被 `pdfinfo` 识别的最小单页 PDF，并在内容中标明 `FAKE RENDERER` 和任务 ID；Fake Printer 只记录调用。页面显示 `succeeded` 仅说明这条演示流水线执行完成，不说明 Chrome 渲染、系统队列或物理出纸已经通过。
 
-真实运行中的网页（服务已连接、两种表单与任务列表）：
+安全审查确认：
 
-![第4天 Mock 控制台](assets/day-04-console.png)
+- 主进程只监听 `127.0.0.1`，页面默认与服务同源。
+- 可选 `file://` 页面必须携带本次启动生成的随机能力值；普通网页 Origin 不获授权。
+- 动态内容使用安全文本节点，不把任务错误或源码写入 `innerHTML`。
+- 启动脚本不拼接用户命令，Worker 也不记录完整源码或底层错误文本。
+- 队列恢复只补入 `queued`，超过容量时明确失败且不部分投递。
 
-## 审查纪要
+本日还用实际 Fake 源码任务运行 `pdfinfo`，返回 0，并报告 1 页、612 x 792 points、PDF 1.4。浏览器自动化受本机 DevTools 策略阻断，因此当日 Web 行为只由 Go/静态契约覆盖，未伪装成浏览器 E2E。
 
-- 端口：主进程只通过候选监听器查找 17653–17660；静态页面探测同一范围并验证 health 标识。
-- 命令：启动脚本不拼接用户输入；从脚本路径回到仓库根后固定执行 Go 入口。
-- 源码保护：工作器错误消费只记录固定说明，不记录错误文本，避免意外写入源码内容。
-- 状态：重试仅接受 `failed`；恢复时只补入 `queued`，容量超过 100 时明确失败且不部分投递。
-- 职责：网页只负责操作 API；持久化、队列、渲染和打印各自独立。
+## 问题、AI 沟通与自检
 
-## 当前 Fake 边界
+早期表述容易把“页面任务成功”写成“打印成功”。与 AI 复核时加入了三层强制约束：Fake 只记录调用、PDF 预览只证明文件可读、系统队列和物理出纸必须另取证。修正后页面文字、日报和测试结论使用同一口径，避免演示效果超过实际证据。
 
-页面与主 API 流程已可演示。Fake renderer 生成带 Catalog、Page、Helvetica 内容流、xref/trailer 的最小合法单页 PDF，页面文本明确标识 `FAKE RENDERER` 和任务 ID；它不是 HTML/Chromedp 渲染。Fake Printer 仅记录命令；没有真实 PDF 预览或平台打印。
-
-修正复验：2026-08-19 使用实际创建的 Fake 源码任务运行 MiKTeX `pdfinfo`，返回 0，并报告 1 页、612×792 points、PDF 1.4。网页错误提示现在按操作来源管理：预览 501 不会被后台两秒刷新成功清除，且刷新失败会继续向创建/重试调用方报告失败。浏览器自动化连接受本机 DevTools 500 策略阻断，行为由网页静态回归契约覆盖。
+自检结果：7 个路由、统一错误、Mock Web、状态刷新和失败重试已形成可操作闭环；preview、真实版式和平台打印仍明确未实现。
 
 ## 明日计划
 
-增加两种 HTML 模板、Chroma 高亮、Chromedp PDF，并形成可演示的真实渲染版本。
+交付两类 HTML 模板、Chroma 源码高亮、Chromedp PDF Renderer 和可读取的 preview 路由；使用含中文队名的气球样例与 140 行中文注释源码完成真实 Chrome 实跑，保存气球、源码首页和第二页三张截图。
