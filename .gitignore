@@ -1,6 +1,26 @@
 .worktrees/
+.superpowers/
 data/
 .cache/
+tools/
+
+# Go build and test artifacts
+*.exe
+*.test
+*.out
+coverage*.txt
+
+# Runtime logs and process files
+*.log
+*.pid
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Project-specific temporary directories
 /.tmp-chrome-screenshot-profile/
 /.tmp-go-cache/
 /.tmp-*-gocache/
