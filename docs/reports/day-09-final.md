@@ -12,9 +12,9 @@
 
 本项目实现了一个面向程序设计竞赛现场的本地打印代理。浏览器向仅监听 `127.0.0.1` 的 Go HTTP 服务提交气球小票或源代码任务；服务将任务持久化后，由容量 100 的单 Worker FIFO 依次完成 HTML 模板、Chrome/Chromium PDF 渲染、打印适配器调用和状态回写。系统提供 7 个 HTTP 接口、嵌入式 Mock Web、JSON 持久化、失败原因、失败任务重试、安全 PDF 预览，以及 Windows SumatraPDF 和 Linux CUPS 两个平台 Adapter。
 
-当前完整可复现证据是 Windows `demo`：脚本自动发现浏览器，health 返回服务标识和 API v1，页面显示“Mock Printer（不执行实体打印）”，任务最终为 `succeeded`，preview 返回 HTTP 200 PDF，停止后端口可重新绑定。Day 5 还保存了真实 Chrome 151 生成的气球单页和源码多页截图。
+当前完整可复现证据是 Windows `demo`：脚本自动发现浏览器，health 返回服务标识和 API v1，页面显示“Mock Printer（不执行实体打印）”，任务最终为 `succeeded`，preview 返回 HTTP 200 PDF，停止后端口可重新绑定。Day 5 还保存了真实 Chrome 151 生成的气球单页和源码多页截图。2026-08-21 补验后，Windows `platform` 模式也具备 runtime、系统队列接受和隔离输出的可复现证据。
 
-最终自动验证为 152 个顶层测试：146 通过、6 跳过、0 失败；12 个含测试包通过，race 检查 0 race，vet、module verify 和 diff 检查通过。Windows Adapter 已由受控 runner 验证；Linux Adapter 和主应用完成交叉编译，但没有在 Linux 内核运行。Windows/Linux 系统队列、Linux/CUPS request id、双平台录屏和真人同学仅看 README 的验收均未完成，本文不以 Fake、受控命令、交叉编译或代理审查替代。
+最终自动验证为 152 个顶层测试：146 通过、6 跳过、0 失败；12 个含测试包通过，race 检查 0 race，vet、module verify 和 diff 检查通过。Linux Adapter 和主应用完成交叉编译，但没有在 Linux 内核运行。2026-08-21 补验完成 Windows platform runtime：在隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受任务并落盘隔离 PDF，全程连续录屏。Linux/CUPS runtime、Linux 录屏和真人同学仅看 README 的验收仍未完成，本文不以 Fake、受控命令、交叉编译或代理审查替代。
 
 ## 二、最终完成矩阵
 
@@ -24,10 +24,10 @@
 | 源代码 PDF | 完成 | 140 行 C++ 生成 6 页；高亮、行号、中文、换行和页码通过 | 系统队列未提交 |
 | FIFO、五状态、错误与重试 | 完成 | Service/Worker/Store 测试；容量 100；重启恢复 | 平台提交仍存在 at-least-once 崩溃窗口 |
 | HTTP API、Mock Web 与 preview | 完成 | 7 路由、200/206 Range、Node VM 行为测试 | 瞬时状态未必被每次 UI 轮询捕获 |
-| Windows Adapter | 部分完成 | 代码、装配和受控 runner 已运行 | 无 SumatraPDF 安全队列接受与录屏 |
+| Windows Adapter | 完成 | 代码、受控 runner、2026-08-21 隔离队列 runtime：系统队列接受并落盘隔离 PDF（任务 `97654d58a864b473735d097571ba6b15`）加连续录屏 | 物理出纸未验证（隔离队列环境，按设计不试投实体设备） |
 | Linux Adapter | 部分完成 | 代码、fixture 和 linux/amd64 交叉编译 | 无 Linux runtime、CUPS request id 与录屏 |
 | README 与启动脚本 | 完成 | Windows 干净副本 demo 成功 | 真人同学只看 README 未做 |
-| 双平台录屏 | 未完成 | 已有 8 分钟演示脚本和补录清单 | 仓库没有实际录像文件 |
+| 双平台录屏 | 部分完成 | Windows 系统队列连续录屏 `docs/reports/assets/windows-platform-queue-2026-08-21.mp4` | Linux 录屏未完成 |
 
 证据分为五层：代码存在、受控命令测试、对应平台 runtime、系统队列接受、物理或隔离文件输出。低层证据不能替代高层结论。`demo succeeded` 只表示 Fake 接受调用；`platform succeeded` 只表示平台命令成功返回；两者都不自动等于物理出纸。
 
@@ -101,7 +101,7 @@ Service 使用随机 128-bit ID，表现为 32 位小写十六进制字符串；
 
 PowerShell/CIM 以 JSON 枚举 `Win32_Printer`；SumatraPDF 参数固定为 `-print-to <枚举名称> -silent <preview.pdf>`。打印机名必须精确属于本轮枚举 allowlist，参数不经 shell。可执行文件与 PDF 均检查完整路径、文件身份和 reparse point，命令超时 30 秒，公开错误不泄露路径或命令输出。
 
-受控 runner 已验证枚举解析、参数顺序、allowlist、超时、文件身份和脱敏，但没有启动真实 SumatraPDF，也没有得到系统队列记录。
+受控 runner 已验证枚举解析、参数顺序、allowlist、超时、文件身份和脱敏。2026-08-21 补验在真实 Windows 11（build 22621）完成 runtime：使用 SumatraPDF 3.6.1 向已确认安全的本地文件端口队列 `ISO-PDF-Queue` 提交气球任务，系统队列接受并落盘 289,600 字节隔离 PDF，任务 `queued -> succeeded`（attempts=1），连续录屏约 4 分 13 秒。该证据证明系统队列接受与隔离输出，不等于物理出纸；证据见 `docs/reports/assets/windows-platform-evidence-2026-08-21.md`。
 
 ### Linux
 
@@ -176,7 +176,7 @@ Linux 测试代码和主应用完成 linux/amd64 交叉编译；当前没有 Lin
 按代码与自动验证范围，核心主路径已经完成；按课程完整人工验收，项目仍为“部分完成”。提交前如具备安全环境，按以下顺序补验：
 
 1. 让真人同学只看 README，从全新副本启动；记录环境、耗时、原话卡点、文档修改和同一人复测。
-2. 在 Windows 配置 SumatraPDF 与已确认的非实体自动保存目标，录制 platform 启动、枚举、任务、队列接受和隔离输出。
+2. ~~在 Windows 配置 SumatraPDF 与已确认的非实体自动保存目标，录制 platform 启动、枚举、任务、队列接受和隔离输出。~~（2026-08-21 已完成：隔离队列 `ISO-PDF-Queue`、任务 `97654d58a864b473735d097571ba6b15`、录屏 `docs/reports/assets/windows-platform-queue-2026-08-21.mp4`。）
 3. 在 Linux/CUPS 环境运行全量测试，记录 `lpstat`、request id、任务状态和队列结果并录屏。
 4. 每段录屏明确说明“平台命令或队列接受不等于物理出纸”；无法确认安全目标时不试投。
 
@@ -192,6 +192,7 @@ Linux 测试代码和主应用完成 linux/amd64 交叉编译；当前没有 Lin
 | Day 1 health 与目录 | `docs/reports/assets/day-01-health.png`、`day-01-project-tree.png` |
 | Day 4 Mock Web | `docs/reports/assets/day-04-console.png` |
 | Day 5 三张真实 PDF 图 | `docs/reports/assets/day-05-balloon.png`、`day-05-source-page-1.png`、`day-05-source-page-2.png` |
+| Windows platform 补验（2026-08-21） | `docs/reports/assets/windows-platform-evidence-2026-08-21.md`（结构化证据）、`windows-platform-queue-2026-08-21.mp4`（连续录屏）、`windows-iso-output-2026-08-21.pdf`（隔离队列产出副本） |
 | 固定气球与源码输入 | `testdata/balloon.json`、`testdata/source_cpp.json` |
 
 Windows demo：

@@ -61,7 +61,7 @@ Day 5 已保存的真实 Chrome 截图仍是有效历史证据，但 Day 7 的�
 - `go vet ./...`、`go mod verify`、`git diff --check`：通过。
 - 6 个 skip 包含显式 opt-in 的真实 Chrome/pdfinfo 和普通账户无权创建 symlink 的场景，skip 不计为 pass。
 - Linux 只证明 build-tag 代码和测试可交叉编译，不证明 CUPS 运行。
-- Windows 未配置 SumatraPDF 和安全自动保存队列，不证明系统接受。
+- Windows 当日未配置 SumatraPDF 和安全自动保存队列，不证明系统接受。（该缺口已于 2026-08-21 补验，见文末「补验记录」。）
 
 ## AI 沟通与自检
 
@@ -72,3 +72,14 @@ Day 5 已保存的真实 Chrome 截图仍是有效历史证据，但 Day 7 的�
 ## 明日计划
 
 交付固定章节 README、7 接口 API 文档、8 分钟演示脚本、Windows/Linux 显式 demo/platform 启动脚本和干净副本启动记录；运行全量 test/race/vet/module/diff 检查，并列出真人启动、双平台录屏和 Linux runtime 的待补材料。
+
+## 补验记录（2026-08-21）：Windows 平台 runtime 与系统队列证据
+
+Day 7 记录的「真实 Chrome 当日复跑环境阻断」与「Windows 未配置 SumatraPDF 和安全队列」两项缺口中的后者已按 PROJECT_HANDOFF.md P0-A 补验完成：
+
+- 环境：Windows 11 Pro build 22621；SumatraPDF 3.6.1（`tools/sumatra/`，不入库）；安全队列 `ISO-PDF-Queue`（Microsoft Print To PDF 驱动 + 本地文件端口，固定输出到本机 print-iso 隔离目录下的 `iso-output.pdf`（仓库外），不出纸、不弹保存对话框）。
+- 提交前先用 SumatraPDF 向该队列冒烟试投一份已有文件，确认静默产出 PDF 后才提交气球任务。
+- platform 模式启动后实际枚举到系统队列；气球任务 `queued -> succeeded`，attempts=1，系统队列实际落盘 289,600 字节 PDF，`%PDF-` 文件头。
+- 连续录屏约 4 分 13 秒，覆盖环境信息、启动、health、枚举、提交、状态、预览、隔离输出与优雅停止。
+- 证据文件：`docs/reports/assets/windows-platform-queue-2026-08-21.mp4`（录屏）、`docs/reports/assets/windows-iso-output-2026-08-21.pdf`（队列产出副本）、`docs/reports/assets/windows-platform-evidence-2026-08-21.md`（结构化记录，含任务 ID `97654d58a864b473735d097571ba6b15`）。
+- 措辞边界：以上证明 Windows 系统队列接受与隔离文件输出，不等于物理出纸；Linux/CUPS runtime 缺口保持不变。
