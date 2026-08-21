@@ -13,7 +13,7 @@
 - **Windows platform runtime 已于 2026-08-21 补验完成**（原 P0-A）：隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受并落盘隔离 PDF，连续录屏与结构化证据见 `docs/reports/assets/windows-platform-evidence-2026-08-21.md`。
 - **Linux/CUPS runtime 已于 2026-08-21 补验完成**（原 P0-B）：WSL2 Ubuntu 24.04.4（真实 Linux 内核）全量测试与 race 通过；platform 模式真实调用 `lp`/`lpstat`，取得 CUPS request id `iso-queue-8` 并落盘隔离 PDF；证据见 `docs/reports/assets/linux-platform-evidence-2026-08-21.md`。
 - **双平台连续录屏已于 2026-08-21 补验完成**（原 P0-C）：Windows 段约 4 分 13 秒、Linux 段约 3 分 30 秒，均含环境、启动、探活、枚举、提交、状态、预览、队列证据与安全退出；视频不入版本控制，保存于 `docs/reports/assets/` 本机路径。
-- **课程完整人工验收仅剩一项：** 真人只读 README 的冷启动测试（P1-A）。
+- **课程完整人工验收已完成（2026-08-22）。** 真人冷启动验收（原 P1-A）已取消，不作为交付要求；除此之外的全部人工验收项（双平台 runtime、系统队列、隔离输出、连续录屏）均有可审计证据。
 
 接手后应优先补齐证据，不要先扩展范围。默认 `demo` 模式不会进入系统打印队列；只有显式 `platform` 模式才可能提交平台打印命令。
 
@@ -91,12 +91,12 @@ failed --retry--> queued
 
 必须保持以下事实：
 
-- Windows Adapter 的受控 runner 已通过，但这不等于真实 SumatraPDF 或 Windows 系统队列已运行。
-- Linux Adapter 已通过代码测试和交叉编译，但这不等于在 Linux 内核调用过 CUPS。
+- Windows Adapter 的受控 runner 已通过；真实 SumatraPDF 与系统队列已于 2026-08-21 在隔离队列上运行并留证。
+- Linux Adapter 已通过代码测试和交叉编译；真实 Linux 内核上的 CUPS 调用已于 2026-08-21 在 WSL2 上完成并留证。
 - Day 5 保存了 Chrome 151 生成 PDF 的真实截图：`docs/reports/assets/day-05-balloon.png`、`docs/reports/assets/day-05-source-page-1.png`、`docs/reports/assets/day-05-source-page-2.png`。
 - Day 7 在受限环境复跑 Chrome E2E 时出现 `context canceled`；该失败记录必须保留，不能被单元测试覆盖。
-- 当前没有 Windows/Linux 系统队列连续录屏，也没有“真人只看 README”验收记录。
-- `demo succeeded` 只表示 Fake Adapter 接受调用；`platform succeeded` 只表示平台命令成功返回；二者都不自动证明系统队列接受或物理出纸。
+- Windows/Linux 系统队列连续录屏已于 2026-08-21 补齐；“真人只看 README”验收已于 2026-08-22 取消，无记录。
+- `demo succeeded` 只表示 Fake Adapter 接受调用；`platform succeeded` 只表示平台命令成功返回；二者都不自动证明系统队列接受或物理出纸。补验后的双平台证据为“系统队列接受 + 隔离输出”，仍不宣称物理出纸。
 
 ## 5. 按优先级排列的后续工作
 
@@ -152,17 +152,9 @@ failed --retry--> queued
 
 **禁止误报：** 剪辑后的单张截图不能替代要求中的连续主路径录屏。
 
-### P1-A：真人 README 冷启动
+### P1-A：真人 README 冷启动（2026-08-22 已取消）
 
-**目标：** 验证未参与开发的人是否能仅凭 README 从干净副本启动 demo 并完成一次预览。
-
-**先读/可能修改：** `README.md`；如发现通用问题，可同步更新 `docs/testing.md`。
-
-**验收标准：** 记录测试者环境、开始和完成时间、原始操作、原话卡点、失败命令、README 修订，以及同一测试者按修订稿重新完成的结果。
-
-**风险：** 开发者口头提示会污染测试；除非涉及安全，应让测试者先按文档独立操作。
-
-**禁止误报：** 开发者本人复跑或 AI 阅读审查不能替代真人冷启动。
+**取消记录：** 项目所有者决定不再执行该验收，不作为交付要求。README 可用性以实现者的干净副本 demo 复现（Day 8 记录：不依赖 Git/缓存/旧数据，主命令一次通过，preview 返回 HTTP 200 PDF）作为最终证据。该取消已在 Day 8/9 报告中如实标注，未删除历史记录。
 
 ### P1-B：可选的平台证据自动化
 
@@ -266,7 +258,7 @@ git diff --check
 3. ~~准备并确认 Windows 安全虚拟/隔离队列，完成 P0-A。~~（已完成，2026-08-21。）
 4. ~~在真实 Linux/CUPS 环境完成 P0-B。~~（已完成，2026-08-21，WSL2。）
 5. ~~按 P0-C 整理双平台连续录屏并回填 Day 7–9。~~（已完成，2026-08-21。）
-6. 邀请真人执行 README 冷启动，完成 P1-A。
+6. ~~邀请真人执行 README 冷启动，完成 P1-A。~~（已取消，2026-08-22。）
 7. 只有证据流程稳定且确有收益时，再评估 P1-B；课程验收前不做 P2。
 8. 每完成一项，运行相关测试和全量普通测试，复核 diff，再提交小而清晰的 commit。
 
@@ -276,7 +268,7 @@ git diff --check
 
 - ~~Windows 安全队列 runtime、系统队列接受和连续录屏已有可审计证据。~~（已完成，2026-08-21。）
 - ~~Linux/CUPS runtime、request id、系统队列结果和连续录屏已有可审计证据。~~（已完成，2026-08-21，含 request id `iso-queue-8`/`iso-queue-9` 与双平台录屏。）
-- 真人仅凭 README 从干净副本完成 demo，卡点和修订有记录。
+- 真人仅凭 README 从干净副本完成 demo 一项已于 2026-08-22 取消，以实现者干净副本复现代替；其余各项均已有可审计证据。
 - Day 7、Day 8、Day 9 报告与最新证据一致，不把低层证据冒充高层证据。
 - 当前 HEAD 的普通测试、适用环境下的 race、vet、module verify 和 diff 检查完成；所有 skip 和环境限制被单列说明。
 - 文档、录像和截图不包含密钥、启动能力值、无关个人路径或未确认的实体打印机信息。

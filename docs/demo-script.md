@@ -155,7 +155,7 @@ go mod verify
 if [[ -e .git ]]; then git diff --check; fi
 ```
 
-**总结**：两类真实 PDF、FIFO、持久化、预览、失败原因和显式双平台边界已经实现；默认 demo 安全可复现。尚未由证据完成的真人 README 启动、Windows/Linux 安全队列录屏和 Linux runtime 验收继续标为未完成，不用自动测试替代。
+**总结**：两类真实 PDF、FIFO、持久化、预览、失败原因和显式双平台边界已经实现；默认 demo 安全可复现。Windows/Linux 安全队列录屏与双平台 runtime 证据已于 2026-08-21 补齐（隔离队列，不出纸）；“队列接受不等于物理出纸”的边界在每段录屏中明确说明。
 
 ## 录制后检查
 

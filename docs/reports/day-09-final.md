@@ -14,7 +14,7 @@
 
 当前完整可复现证据是 Windows `demo`：脚本自动发现浏览器，health 返回服务标识和 API v1，页面显示“Mock Printer（不执行实体打印）”，任务最终为 `succeeded`，preview 返回 HTTP 200 PDF，停止后端口可重新绑定。Day 5 还保存了真实 Chrome 151 生成的气球单页和源码多页截图。2026-08-21 补验后，Windows `platform` 模式也具备 runtime、系统队列接受和隔离输出的可复现证据。
 
-最终自动验证为 152 个顶层测试：146 通过、6 跳过、0 失败；12 个含测试包通过，race 检查 0 race，vet、module verify 和 diff 检查通过。2026-08-21 补验完成双平台 platform runtime：Windows 在隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受并落盘隔离 PDF，全程连续录屏；Linux 在 WSL2（真实 Linux 内核）上以 CUPS 2.4.7 真实调用 `lp`/`lpstat` 并全量回归通过，取得 request id `iso-queue-8` 并落盘隔离 PDF。真人同学仅看 README 的验收仍未完成，本文不以 Fake、受控命令、交叉编译或代理审查替代。
+最终自动验证为 152 个顶层测试：146 通过、6 跳过、0 失败；12 个含测试包通过，race 检查 0 race，vet、module verify 和 diff 检查通过。2026-08-21 补验完成双平台 platform runtime：Windows 在隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受并落盘隔离 PDF，全程连续录屏；Linux 在 WSL2（真实 Linux 内核）上以 CUPS 2.4.7 真实调用 `lp`/`lpstat` 并全量回归通过，取得 request id `iso-queue-8` 并落盘隔离 PDF。真人冷启动验收已取消（2026-08-22，以实现者干净副本复现代替），本文不以 Fake、受控命令、交叉编译或代理审查替代任何已声明完成的项。
 
 ## 二、最终完成矩阵
 
@@ -26,7 +26,7 @@
 | HTTP API、Mock Web 与 preview | 完成 | 7 路由、200/206 Range、Node VM 行为测试 | 瞬时状态未必被每次 UI 轮询捕获 |
 | Windows Adapter | 完成 | 代码、受控 runner、2026-08-21 隔离队列 runtime：系统队列接受并落盘隔离 PDF（任务 `97654d58a864b473735d097571ba6b15`）加连续录屏 | 物理出纸未验证（隔离队列环境，按设计不试投实体设备） |
 | Linux Adapter | 完成 | 代码、fixture、交叉编译，以及 2026-08-21 WSL2 真实 Linux 内核 runtime：全量测试通过、CUPS request id `iso-queue-8`/`iso-queue-9`、隔离输出落盘（任务 `07381f3ef5c6b9e2a73b86b34ad402d3`、`01d82152c37ba29a278d65c0c6544886`）加连续录屏 | 物理出纸未验证（隔离队列环境，按设计不试投实体设备） |
-| README 与启动脚本 | 完成 | Windows 干净副本 demo 成功 | 真人同学只看 README 未做 |
+| README 与启动脚本 | 完成 | Windows 干净副本 demo 成功（真人冷启动验收已于 2026-08-22 取消） | 无 |
 | 双平台录屏 | 完成 | Windows `windows-platform-queue-2026-08-21.mp4` 与 Linux `linux-platform-queue-2026-08-21.mp4` 连续录屏（均因仓库体积限制不入版本控制，本机 assets 目录保存） | 无 |
 
 证据分为五层：代码存在、受控命令测试、对应平台 runtime、系统队列接受、物理或隔离文件输出。低层证据不能替代高层结论。`demo succeeded` 只表示 Fake 接受调用；`platform succeeded` 只表示平台命令成功返回；两者都不自动等于物理出纸。
@@ -175,7 +175,7 @@ Linux 测试代码和主应用完成 linux/amd64 交叉编译。2026-08-21 补�
 
 按代码与自动验证范围，核心主路径已经完成；按课程完整人工验收，项目仍为“部分完成”。提交前如具备安全环境，按以下顺序补验：
 
-1. 让真人同学只看 README，从全新副本启动；记录环境、耗时、原话卡点、文档修改和同一人复测。
+1. ~~让真人同学只看 README，从全新副本启动；记录环境、耗时、原话卡点、文档修改和同一人复测。~~（2026-08-22 取消：该验收不再作为交付要求，以实现者干净副本 demo 复现代替。）
 2. ~~在 Windows 配置 SumatraPDF 与已确认的非实体自动保存目标，录制 platform 启动、枚举、任务、队列接受和隔离输出。~~（2026-08-21 已完成：隔离队列 `ISO-PDF-Queue`、任务 `97654d58a864b473735d097571ba6b15`、录屏 `docs/reports/assets/windows-platform-queue-2026-08-21.mp4`。）
 3. ~~在 Linux/CUPS 环境运行全量测试，记录 `lpstat`、request id、任务状态和队列结果并录屏。~~（2026-08-21 全部完成：request id `iso-queue-8`/`iso-queue-9`，连续录屏 `linux-platform-queue-2026-08-21.mp4`。）
 4. 每段录屏明确说明“平台命令或队列接受不等于物理出纸”；无法确认安全目标时不试投。
