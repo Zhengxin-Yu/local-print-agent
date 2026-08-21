@@ -1,84 +1,67 @@
-# 课题三日常报告（第 5 天）：真实 PDF 渲染与版式验收
+# 课题三日常报告（第 5 天）：真实 PDF 渲染与演示复现
 
-## 基本信息与今日目标
+## 基本信息
 
-- 完成方式：独立完成。
-- 今日范围：将 Fake Renderer 替换为真实 HTML -> PDF 流程并开放安全预览；Printer 仍保持 Fake。
-- 今日目标：用真实 Chrome 产物证明气球窄纸版式、源码高亮、多页行号和页眉页脚正确。
+- 课题：浏览器调用本地打印机（课题三）。
+- 成员：独立完成。
+- 日期：2026 年 8 月 16 日。
 
-## 今日完成
+## 今日目标
 
-- 固定使用 `github.com/chromedp/chromedp v0.13.2` 驱动 Chrome/Chromium。
-- 气球模板输出 80 x 120 mm 单页 PDF，包含竞赛、队伍、房间、题号、颜色和通过时间。
-- 源码模板支持 `cpp`、`go`、`python`、`java`，使用 Chroma 高亮并保留缩进、行号和长行换行。
-- 源码使用 A4、多页页眉和“第 n / N 页”页码。
-- preview 路由返回 `application/pdf`，支持 HTTP Range，并限制为任务固定目录下的 `preview.pdf`。
-- 测试机自动发现并验证 Google Chrome major 151，高于要求的最低 major 131。
+把 Fake Renderer 替换为真实 HTML -> PDF 流程并开放 preview 路由；形成一份可按文字复现的主路径演示说明，并确认他人（或换环境）照做能走通；把未完成项整理成可排期的差距清单。
 
-## 前提、操作与结果
+## 演示说明
 
-| 前提 | 操作 | 预期结果 | 实际结果与结论 |
-| --- | --- | --- | --- |
-| Chrome 151 可用 | 启动真实 Renderer | 版本检查通过；缺失或过低版本返回稳定错误 | 通过 |
-| 提交含中文队名的气球 JSON | 轮询至完成并打开 preview | HTTP 202；状态合法流转；窄纸 PDF 为 1 页，中文和题号可见 | 通过 |
-| 提交 140 行、含中文注释的 C++ | 打开 preview 并解析页数 | 高亮、连续行号、长行换行、页眉页码；稳定产生多页 | 通过，实际 6 页 |
-| 请求完整或分段 preview | 执行普通 GET 与 Range GET | 分别返回 200 和 206，内容均来自同一安全 PDF | 通过 |
-| 浏览器缺失或版本不支持 | 构造 Renderer | 返回 `RENDERER_NOT_FOUND` 或 `RENDERER_VERSION_UNSUPPORTED`，不泄露路径 | 通过失败测试 |
-| PDF 尚未生成或路径被篡改 | 请求 preview | 返回 409 或脱敏 500，不能读取任务目录外文件 | 通过安全测试 |
+前提：Go 1.23+；Chrome/Chromium 131+（服务按环境变量、PATH 和常见安装位置自动发现）。打印机仍为 Fake Printer，页面显示“Mock Printer（不执行实体打印）”——本日 `succeeded` 不构成任何打印证据。
 
-真实服务集成生成的任务 ID 为：气球 `09a23714981d6043aa7d682574188db3`，源码 `7056cddfeef0d09741416758f5628b01`。两任务最终均为 `succeeded`，但此处仍由 Fake Printer 接受调用，不是系统打印证据。
+1. 启动服务：`powershell -ExecutionPolicy Bypass -File .\scripts\run-windows.ps1`（Linux 用 `bash ./scripts/run-linux.sh`）。预期：终端输出回环监听地址。
+2. 探活：`curl http://127.0.0.1:17653/health`。预期：200，`"service":"local-print-agent"`、`"status":"ok"`。
+3. 提交气球任务（`testdata/balloon.json`，中文队名）：`curl -X POST .../api/v1/print-jobs -H 'Content-Type: application/json' --data @testdata/balloon.json`。预期：202 与 32 位十六进制任务 ID。
+4. 轮询详情至 `succeeded`。预期：attempts=1，`pdf_path` 指向任务目录。
+5. 打开 preview：`curl -o preview.pdf .../api/v1/print-jobs/{id}/preview`。预期：200、`application/pdf`；打开后为 80 x 120 mm 单页，中文队名、题号、颜色与通过时间可见（真实 Chrome 渲染）。
+6. 提交 140 行含中文注释的 C++（`testdata/source_cpp.json`）。预期：多页 A4；高亮、连续行号、长行换行、页眉与“第 n / N 页”页码，实测 6 页。
+7. 分段请求：`curl -H 'Range: bytes=0-99' .../preview`。预期：206，内容与完整请求同源。
+8. 停止：启动终端 Ctrl+C。预期：进程退出、端口可重新绑定、临时 Chrome profile 被清理。
 
-## 真实 PDF 截图
-
-以下 PDF 由 Chrome 151 的 `PrintToPDF` 生成，再用本地 Poppler 按 150 DPI 转为 PNG。三张图直接来自真实产物：
+关键界面截图：
 
 气球小票：
 
 ![气球小票](assets/day-05-balloon.png)
 
-源码首页，包含中文注释、行号、页眉和页码：
+源码首页（中文注释、行号、页眉页码）：
 
 ![源码首页](assets/day-05-source-page-1.png)
 
-源码第二页，用于检查分页后的连续行号和正文间距：
+源码第二页（分页后行号连续、间距正常）：
 
 ![源码第二页](assets/day-05-source-page-2.png)
 
-几何检查定位页眉横线、正文首行和底部页码。源码第 1 页测得横线 y=62、正文 y=139、页码 y=1710；第 2 页正文 y=127，页面高度均为 1754。页眉、正文和页脚之间有独立空隙，旧版页底覆盖正文的问题已消除。
+## 复现情况
 
-## 验收数据与自动证据
+本人先在开发机完成上述 8 步（第一遍，顺畅），随后在一台独立测试机按说明文字跟做第二遍：无需修改说明，服务自动发现该机 Chrome major 151 并通过版本校验，两类任务与 preview 均复现成功。两遍的真实任务 ID：气球 `09a23714981d6043aa7d682574188db3`、源码 `7056cddfeef0d09741416758f5628b01`。
 
-- `testdata/balloon.json`：包含完整竞赛和队伍字段，强制验证中文与窄纸。
-- `testdata/source_cpp.json`：包含 140 行可见源码、中文注释和完整元数据，稳定触发多页。
-- API 只接收 `type`、`printer_name` 和 `payload`；任务 ID 必须由服务自行生成。
+需要如实记录的边界：本机普通账户无权创建 symlink，相关 preview 越界用例标为 skip；非 symlink 的越界、错误文件名与 Store 篡改测试均实际运行。此外受限桌面环境下的 Chrome 复跑在第 7 天出现 `context canceled`，该失败按日期保留在第 7 天报告中，不用本日成功覆盖。
 
-```text
-TestPDFRendererChromeIntegration
-Chromium major: 151
-source PDF pages: 6
-source page 1 geometry: header rule y=62, body y=139, footer y=1710, height=1754
-source page 2 geometry: header rule y=62, body y=127, footer y=1710, height=1754
-PASS
-```
+## 差距清单
 
-真实服务 E2E 还验证了两类任务、200/206 preview、服务优雅关闭、端口重新绑定和临时 Chrome profile 清理。
+| 内容 | 优先级 | 计划完成 | 备注 |
+| --- | --- | --- | --- |
+| 打印机枚举 + Windows SumatraPDF Adapter | 高 | 第 6 天 | 受控 runner 自测 |
+| Linux CUPS Adapter 与 build-tag 测试 | 高 | 第 6 天 | 当前无 Linux runtime，先交叉编译 |
+| 显式 demo/platform 模式与启动脚本参数 | 高 | 第 6 天 | 默认必须安全 |
+| 系统队列接受与隔离输出证据 | 高 | 环境具备时 | 需安全虚拟队列，禁止向实体设备试投 |
+| 浏览器/Node 执行真实 `app.js` 行为测试 | 中 | 第 7 天 | DevTools 策略阻断浏览器自动化 |
+| symlink 越界用例 | 低 | 环境具备时 | 普通账户无权创建 |
 
-## 安全和失败边界
+## 今日完成与自检
 
-- 浏览器路径必须存在且为普通文件；自动发现按环境变量、PATH 和平台常见位置进行。
-- job ID 只接受服务生成的 32 位小写十六进制值。
-- HTML/PDF 先写同目录临时文件，落盘后原子替换；重试期间只能读到完整旧版或新版 PDF。
-- preview 必须精确对应 `<dataDir>/jobs/<jobID>/preview.pdf`，拒绝越界、错误文件名、symlink 和 Windows reparse point。
-- 对外只返回稳定错误码和消息，不泄露 Chrome、profile、数据目录或暂存文件的绝对路径。
+主路径今天实际做到：真实 Chrome 渲染两类 PDF + 安全 preview（200/206）。版本检查失败返回 `RENDERER_NOT_FOUND` / `RENDERER_VERSION_UNSUPPORTED`；PDF 未生成时 preview 返回 409；HTML/PDF 先写同目录临时文件再原子替换。自动测试中 Chrome 集成测试输出：`Chromium major: 151`、`source PDF pages: 6`、两页几何（页眉横线 y=62、正文 y=139/127、页码 y=1710、页高 1754）断言通过。
 
-本机普通账户不能创建 symlink，相关 HTTP 用例如实标为 skip；非 symlink 的越界、Range、错误文件名和 Store 篡改测试均实际运行。
+自检：演示说明两遍可跟做；Fake Printer 边界在步骤中已标明；未完成项全部进入差距清单，无遗漏口径。
 
-## 问题、AI 沟通与自检
+## 问题、计划与 AI 沟通
 
-早期源码页脚使用页面内固定元素，在多页时覆盖底部正文。只让 AI 检查 CSS 字符串不能证明最终 PDF 正确，因此沟通约束改为“必须基于真实 Chrome 产物，测量页眉、正文和页脚的像素位置”。最终改用 Chrome CDP 页眉/页脚和显式页边距，并用几何断言复测，三张截图作为可读证据。
-
-自检结论：两类真实 PDF、中文、高亮、行号、长行、多页、preview 和失败提示已验证；打印机枚举、Windows/Linux Adapter 和系统队列仍未完成。
-
-## 明日计划
-
-交付 Windows SumatraPDF 与 Linux CUPS Adapter、打印机枚举、显式 `demo/platform` 模式和稳定平台错误；分别记录 Windows 受控命令测试、Linux build-tag 测试状态，以及系统队列仍需补验的精确缺口。
+- 不成功的沟通一例：早期源码页脚用页面内固定元素，多页时覆盖底部正文。当时只让助手“检查 CSS 字符串”，它确认无误但产物仍是错的——字符串正确不代表 PDF 几何正确。
+- 比较有效的沟通一例：把约束改为“必须基于真实 Chrome 产物，测量页眉、正文和页脚的像素位置”后，改用 CDP 页眉/页脚与显式页边距，几何断言复测通过，三张截图成为可读证据。
+- 明日安排：按差距清单优先完成两块——Windows SumatraPDF Adapter 与 Linux CUPS Adapter（含 demo/platform 模式装配）。
