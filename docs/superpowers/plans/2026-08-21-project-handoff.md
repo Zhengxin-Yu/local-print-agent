@@ -34,15 +34,15 @@
 - Consumes: Existing repository behavior and recorded course evidence.
 - Produces: One repository-relative handoff entry point for Code Buddy.
 
-- [ ] **Step 1: Replace the temporary draft with the approved document structure**
+- [x] **Step 1: Replace the temporary draft with the approved document structure**
 
   Create `PROJECT_HANDOFF.md` with project status, completed modules, evidence levels, P0/P1/P2 work, startup and verification commands, invariants, known dependencies, takeover order, definition of done, and a copy-ready Code Buddy prompt. Remove `CODE_BUDDY_HANDOFF.md` because it contains absolute local paths and unsupported fresh-verification wording.
 
-- [ ] **Step 2: Self-review every completion claim**
+- [x] **Step 2: Self-review every completion claim**
 
   Check that Windows controlled-runner evidence is not described as SumatraPDF/system-queue runtime evidence; Linux cross-compilation is not described as CUPS runtime evidence; Day 7 `context canceled` remains stated; and no Windows/Linux system-queue recording or README-only human test is claimed.
 
-- [ ] **Step 3: Check every referenced repository path**
+- [x] **Step 3: Check every referenced repository path**
 
   Run a PowerShell path-existence check over every backticked path intentionally cited as a file or directory, and fix missing or ambiguous paths.
 
@@ -56,29 +56,29 @@
 - Consumes: The completed `PROJECT_HANDOFF.md` from Task 1.
 - Produces: A committed, verified handoff document with explicit evidence boundaries.
 
-- [ ] **Step 1: Scan for prohibited content and unfinished markers**
+- [x] **Step 1: Scan for prohibited content and unfinished markers**
 
   Search the document for drive-letter paths, remote web URLs, secret-like field names, and unfinished-marker strings. Review all matches and remove anything not required by the project description.
 
-- [ ] **Step 2: Run focused document tests**
+- [x] **Step 2: Run focused document tests**
 
   Run: `go test ./docs -count=1`
 
   Expected: the `docs` package passes.
 
-- [ ] **Step 3: Run the full ordinary test suite**
+- [x] **Step 3: Run the full ordinary test suite**
 
   Run: `go test ./... -count=1`
 
   Expected: all runnable packages pass; any environment-dependent skips remain explicitly distinguished from passes.
 
-- [ ] **Step 4: Check patch formatting**
+- [x] **Step 4: Check patch formatting**
 
   Run: `git diff --check`
 
   Expected: exit code 0 with no whitespace errors.
 
-- [ ] **Step 5: Commit the final handoff**
+- [x] **Step 5: Commit the final handoff**
 
   Run:
 
