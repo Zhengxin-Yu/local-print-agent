@@ -14,7 +14,7 @@
 
 当前完整可复现证据是 Windows `demo`：脚本自动发现浏览器，health 返回服务标识和 API v1，页面显示“Mock Printer（不执行实体打印）”，任务最终为 `succeeded`，preview 返回 HTTP 200 PDF，停止后端口可重新绑定。Day 5 还保存了真实 Chrome 151 生成的气球单页和源码多页截图。2026-08-21 补验后，Windows `platform` 模式也具备 runtime、系统队列接受和隔离输出的可复现证据。
 
-最终自动验证为 152 个顶层测试：146 通过、6 跳过、0 失败；12 个含测试包通过，race 检查 0 race，vet、module verify 和 diff 检查通过。Linux Adapter 和主应用完成交叉编译，但没有在 Linux 内核运行。2026-08-21 补验完成 Windows platform runtime：在隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受任务并落盘隔离 PDF，全程连续录屏。Linux/CUPS runtime、Linux 录屏和真人同学仅看 README 的验收仍未完成，本文不以 Fake、受控命令、交叉编译或代理审查替代。
+最终自动验证为 152 个顶层测试：146 通过、6 跳过、0 失败；12 个含测试包通过，race 检查 0 race，vet、module verify 和 diff 检查通过。2026-08-21 补验完成双平台 platform runtime：Windows 在隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受并落盘隔离 PDF，全程连续录屏；Linux 在 WSL2（真实 Linux 内核）上以 CUPS 2.4.7 真实调用 `lp`/`lpstat` 并全量回归通过，取得 request id `iso-queue-8` 并落盘隔离 PDF。真人同学仅看 README 的验收与 Linux 连续录屏仍未完成，本文不以 Fake、受控命令、交叉编译或代理审查替代。
 
 ## 二、最终完成矩阵
 
@@ -25,7 +25,7 @@
 | FIFO、五状态、错误与重试 | 完成 | Service/Worker/Store 测试；容量 100；重启恢复 | 平台提交仍存在 at-least-once 崩溃窗口 |
 | HTTP API、Mock Web 与 preview | 完成 | 7 路由、200/206 Range、Node VM 行为测试 | 瞬时状态未必被每次 UI 轮询捕获 |
 | Windows Adapter | 完成 | 代码、受控 runner、2026-08-21 隔离队列 runtime：系统队列接受并落盘隔离 PDF（任务 `97654d58a864b473735d097571ba6b15`）加连续录屏 | 物理出纸未验证（隔离队列环境，按设计不试投实体设备） |
-| Linux Adapter | 部分完成 | 代码、fixture 和 linux/amd64 交叉编译 | 无 Linux runtime、CUPS request id 与录屏 |
+| Linux Adapter | 完成 | 代码、fixture、交叉编译，以及 2026-08-21 WSL2 真实 Linux 内核 runtime：全量测试通过、CUPS request id `iso-queue-8`、隔离输出落盘（任务 `07381f3ef5c6b9e2a73b86b34ad402d3`） | Linux 连续录屏未完成；物理出纸未验证（隔离队列环境，按设计不试投实体设备） |
 | README 与启动脚本 | 完成 | Windows 干净副本 demo 成功 | 真人同学只看 README 未做 |
 | 双平台录屏 | 部分完成 | Windows 系统队列连续录屏 `docs/reports/assets/windows-platform-queue-2026-08-21.mp4` | Linux 录屏未完成 |
 
@@ -107,7 +107,7 @@ PowerShell/CIM 以 JSON 枚举 `Win32_Printer`；SumatraPDF 参数固定为 `-pr
 
 使用 `lpstat -p` 与 `lpstat -d` 枚举，再以 `lp -d <枚举队列> <preview.pdf>` 提交；runner 固定 `LC_ALL=C`。同样要求 allowlist、参数数组、30 秒超时、固定 preview 路径和逐级 symlink 检查。
 
-Linux 测试代码和主应用完成 linux/amd64 交叉编译；当前没有 Linux 内核运行、`lp/lpstat` 真实调用、CUPS request id 或队列截图。
+Linux 测试代码和主应用完成 linux/amd64 交叉编译。2026-08-21 补验在 WSL2 Ubuntu 24.04.4（真实 Linux 内核 6.18）完成 runtime：全量测试（含 race，cgo+gcc）在 Linux 内核通过；platform 模式以非特权用户真实调用 `lp`/`lpstat`，枚举到 CUPS 队列 `iso-queue`，气球任务 `queued -> succeeded`，取得 CUPS request id `iso-queue-8` 并落盘 32362 字节隔离 PDF；SIGINT 优雅退出。该证据证明 Linux runtime 与系统队列接受，不等于物理出纸，且环境为 WSL2，如实标注；证据见 `docs/reports/assets/linux-platform-evidence-2026-08-21.md`。
 
 ## 八、错误、安全与恢复
 
@@ -177,7 +177,7 @@ Linux 测试代码和主应用完成 linux/amd64 交叉编译；当前没有 Lin
 
 1. 让真人同学只看 README，从全新副本启动；记录环境、耗时、原话卡点、文档修改和同一人复测。
 2. ~~在 Windows 配置 SumatraPDF 与已确认的非实体自动保存目标，录制 platform 启动、枚举、任务、队列接受和隔离输出。~~（2026-08-21 已完成：隔离队列 `ISO-PDF-Queue`、任务 `97654d58a864b473735d097571ba6b15`、录屏 `docs/reports/assets/windows-platform-queue-2026-08-21.mp4`。）
-3. 在 Linux/CUPS 环境运行全量测试，记录 `lpstat`、request id、任务状态和队列结果并录屏。
+3. ~~在 Linux/CUPS 环境运行全量测试，记录 `lpstat`、request id、任务状态和队列结果并录屏。~~（2026-08-21 已完成测试、`lpstat`、request id `iso-queue-8` 与队列结果；仅 Linux 连续录屏仍缺，录制时按 Windows 段同标准执行。）
 4. 每段录屏明确说明“平台命令或队列接受不等于物理出纸”；无法确认安全目标时不试投。
 
 ## 十三、交付与证据索引
@@ -193,6 +193,7 @@ Linux 测试代码和主应用完成 linux/amd64 交叉编译；当前没有 Lin
 | Day 4 Mock Web | `docs/reports/assets/day-04-console.png` |
 | Day 5 三张真实 PDF 图 | `docs/reports/assets/day-05-balloon.png`、`day-05-source-page-1.png`、`day-05-source-page-2.png` |
 | Windows platform 补验（2026-08-21） | `docs/reports/assets/windows-platform-evidence-2026-08-21.md`（结构化证据）、`windows-platform-queue-2026-08-21.mp4`（连续录屏）、`windows-iso-output-2026-08-21.pdf`（隔离队列产出副本） |
+| Linux/CUPS platform 补验（2026-08-21） | `docs/reports/assets/linux-platform-evidence-2026-08-21.md`（结构化证据，含 CUPS request id）、`linux-iso-output-2026-08-21.pdf`（隔离队列产出副本） |
 | 固定气球与源码输入 | `testdata/balloon.json`、`testdata/source_cpp.json` |
 
 Windows demo：

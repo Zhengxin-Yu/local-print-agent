@@ -60,7 +60,7 @@ Day 5 已保存的真实 Chrome 截图仍是有效历史证据，但 Day 7 的�
 - `go test -race ./... -count=1`：10 个含测试包通过，0 race。
 - `go vet ./...`、`go mod verify`、`git diff --check`：通过。
 - 6 个 skip 包含显式 opt-in 的真实 Chrome/pdfinfo 和普通账户无权创建 symlink 的场景，skip 不计为 pass。
-- Linux 只证明 build-tag 代码和测试可交叉编译，不证明 CUPS 运行。
+- Linux 只证明 build-tag 代码和测试可交叉编译，不证明 CUPS 运行。（该缺口已于 2026-08-21 补验，见文末「补验记录」。）
 - Windows 当日未配置 SumatraPDF 和安全自动保存队列，不证明系统接受。（该缺口已于 2026-08-21 补验，见文末「补验记录」。）
 
 ## AI 沟通与自检
@@ -83,3 +83,13 @@ Day 7 记录的「真实 Chrome 当日复跑环境阻断」与「Windows 未配�
 - 连续录屏约 4 分 13 秒，覆盖环境信息、启动、health、枚举、提交、状态、预览、隔离输出与优雅停止。
 - 证据文件：`docs/reports/assets/windows-platform-queue-2026-08-21.mp4`（录屏）、`docs/reports/assets/windows-iso-output-2026-08-21.pdf`（队列产出副本）、`docs/reports/assets/windows-platform-evidence-2026-08-21.md`（结构化记录，含任务 ID `97654d58a864b473735d097571ba6b15`）。
 - 措辞边界：以上证明 Windows 系统队列接受与隔离文件输出，不等于物理出纸；Linux/CUPS runtime 缺口保持不变。
+
+## 补验记录（2026-08-21）：Linux/CUPS runtime 与 request id
+
+Day 7 记录的「Linux/CUPS 仅交叉编译、无 Linux runtime」缺口已按 PROJECT_HANDOFF.md P0-B 补验完成：
+
+- 环境：WSL2 Ubuntu 24.04.4 LTS（内核 6.18.33.2-microsoft-standard-WSL2，真实 Linux 内核）；Go 1.25.4 linux/amd64；CUPS 2.4.7（真实 `lp`/`lpstat` 调用）；Chrome 151.0.7922.173；安全队列 `iso-queue`（cups-pdf:/ 后端，输出固定到 WSL 文件系统内 var 下的 print-iso 隔离目录（仓库外），不出纸、无弹窗，提交前已冒烟验证）；服务以非特权用户 `printuser` 运行。
+- 自动回归在真实 Linux 内核执行：`go test ./...`、`go test -race ./...`（cgo+gcc）、`go vet`、`go mod verify` 全部通过；`internal/printer` Linux build-tag 测试不再是交叉编译验证。
+- platform 模式端到端：枚举到 `iso-queue` 与 `PDF` 两个 CUPS 队列；中文气球任务 `07381f3ef5c6b9e2a73b86b34ad402d3` 经 `queued -> succeeded`（attempts=1）；CUPS request id 证据 `iso-queue-8`（`lpstat -W all`）；隔离输出 print-iso 目录下的 `preview.pdf` 32362 字节（`%PDF-`）；preview HTTP 200；SIGINT 优雅退出后端口关闭。
+- 证据文件：`docs/reports/assets/linux-platform-evidence-2026-08-21.md`（结构化记录）、`docs/reports/assets/linux-iso-output-2026-08-21.pdf`（队列产出副本）。
+- 措辞边界：证明 Linux 平台 runtime 与 CUPS 系统队列接受（含 request id）及隔离输出，不等于物理出纸；运行环境为 WSL2，非物理机，如实标注。

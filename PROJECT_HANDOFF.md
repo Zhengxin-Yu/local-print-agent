@@ -11,7 +11,8 @@
 
 - **代码与默认安全演示主路径已完成。** 两类任务、PDF、7 个 HTTP 接口、嵌入式 Web、JSON 持久化、单 Worker FIFO、失败原因、失败重试、Windows/Linux Adapter 和启动文档均已存在。
 - **Windows platform runtime 已于 2026-08-21 补验完成**（原 P0-A）：隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受并落盘隔离 PDF，连续录屏与结构化证据见 `docs/reports/assets/windows-platform-evidence-2026-08-21.md`。
-- **课程完整人工验收仍是部分完成。** 尚缺 Linux/CUPS runtime 实跑、Linux 连续录屏，以及真人只读 README 的冷启动测试。
+- **Linux/CUPS runtime 已于 2026-08-21 补验完成**（原 P0-B）：WSL2 Ubuntu 24.04.4（真实 Linux 内核）全量测试与 race 通过；platform 模式真实调用 `lp`/`lpstat`，取得 CUPS request id `iso-queue-8` 并落盘隔离 PDF；证据见 `docs/reports/assets/linux-platform-evidence-2026-08-21.md`。
+- **课程完整人工验收仍剩两项：** Linux platform 连续录屏（P0-C 的 Linux 段）与真人只读 README 的冷启动测试（P1-A）。
 
 接手后应优先补齐证据，不要先扩展范围。默认 `demo` 模式不会进入系统打印队列；只有显式 `platform` 模式才可能提交平台打印命令。
 
@@ -83,9 +84,9 @@ failed --retry--> queued
 | --- | --- | --- |
 | 1. 代码存在 | 实现和测试文件可定位 | 已有 |
 | 2. 受控命令测试 | Fake 或受控 runner 验证参数、错误和状态 | 已有 |
-| 3. 对应平台 runtime | 在真实 Windows/Linux 环境运行目标 Adapter | Windows 已完成（2026-08-21）；Linux 未完成 |
-| 4. 系统队列接受 | 系统队列产生可审计作业记录或 request id | Windows 已完成（隔离队列落盘证据）；Linux 未完成 |
-| 5. 物理或隔离输出 | 实体出纸或安全虚拟目标生成隔离文件 | Windows 隔离输出已验证；物理出纸未验证且不应在安全队列环境宣称 |
+| 3. 对应平台 runtime | 在真实 Windows/Linux 环境运行目标 Adapter | Windows 已完成（2026-08-21）；Linux 已完成（2026-08-21，WSL2 真实内核） |
+| 4. 系统队列接受 | 系统队列产生可审计作业记录或 request id | Windows 已完成（隔离队列落盘证据）；Linux 已完成（CUPS request id `iso-queue-8`） |
+| 5. 物理或隔离输出 | 实体出纸或安全虚拟目标生成隔离文件 | 双平台隔离输出均已验证；物理出纸未验证且不应在安全队列环境宣称 |
 
 必须保持以下事实：
 
@@ -117,9 +118,11 @@ failed --retry--> queued
 
 **禁止误报：** 仅 SumatraPDF 返回成功时，不能写成“Windows 已打印”或“已物理出纸”。
 
-### P0-B：Linux/CUPS runtime 与 request id
+### P0-B：Linux/CUPS runtime 与 request id（2026-08-21 已完成）
 
-**目标：** 在真实 Linux 内核环境中验证普通测试、CUPS 枚举和安全队列提交。
+**完成记录：** 在 WSL2 Ubuntu 24.04.4 LTS（内核 6.18.33.2-microsoft-standard-WSL2，真实 Linux 内核）完成补验。环境：Go 1.25.4、CUPS 2.4.7（真实 `lp`/`lpstat`）、Chrome 151、非特权用户 `printuser`、安全队列 `iso-queue`（cups-pdf:/ 后端，输出固定到 WSL 文件系统内 var 下的 print-iso 隔离目录（仓库外），不出纸、无弹窗，提交前冒烟验证）。全量测试（含 race，cgo+gcc）、vet、module verify 在真实 Linux 内核通过；platform 模式枚举到 CUPS 队列，中文气球任务 `07381f3ef5c6b9e2a73b86b34ad402d3` 经 `queued -> succeeded`（attempts=1），CUPS request id `iso-queue-8`（`lpstat -W all`），隔离输出 32362 字节 PDF，preview HTTP 200，SIGINT 优雅退出。证据：`docs/reports/assets/linux-platform-evidence-2026-08-21.md`、`linux-iso-output-2026-08-21.pdf`；Day 7–9 报告已回填。措辞边界：证明 Linux runtime 与系统队列接受（含 request id），不等于物理出纸；环境为 WSL2，如实标注。遗留：Linux 连续录屏（归入 P0-C）。
+
+**原始目标（存档）：** 在真实 Linux 内核环境中验证普通测试、CUPS 枚举和安全队列提交。
 
 **先读/可能修改：** `README.md`、`docs/testing.md`、`internal/printer/linux.go`、`scripts/run-linux.sh`；完成后更新 Day 7–9 报告。
 
@@ -258,8 +261,8 @@ git diff --check
 1. 阅读本文件、`README.md`、`docs/testing.md`、`docs/demo-script.md` 和 `docs/reports/day-09-final.md`。
 2. 检查 Git 状态，运行普通测试，记录当前基线；不要先改代码。
 3. ~~准备并确认 Windows 安全虚拟/隔离队列，完成 P0-A。~~（已完成，2026-08-21。）
-4. 在真实 Linux/CUPS 环境完成 P0-B。
-5. 按 P0-C 整理双平台连续录屏并回填 Day 7–9（Windows 段已有，缺 Linux 段）。
+4. ~~在真实 Linux/CUPS 环境完成 P0-B。~~（已完成，2026-08-21，WSL2。）
+5. 按 P0-C 整理双平台连续录屏并回填 Day 7–9（Windows 段已有，仅缺 Linux 段录屏）。
 6. 邀请真人执行 README 冷启动，完成 P1-A。
 7. 只有证据流程稳定且确有收益时，再评估 P1-B；课程验收前不做 P2。
 8. 每完成一项，运行相关测试和全量普通测试，复核 diff，再提交小而清晰的 commit。
@@ -269,7 +272,7 @@ git diff --check
 只有同时满足以下条件，才能把课程交付状态从“部分完成”改为“完整完成”：
 
 - ~~Windows 安全队列 runtime、系统队列接受和连续录屏已有可审计证据。~~（已完成，2026-08-21。）
-- Linux/CUPS runtime、request id、系统队列结果和连续录屏已有可审计证据。
+- ~~Linux/CUPS runtime、request id、系统队列结果和连续录屏已有可审计证据。~~（runtime、request id 与系统队列结果已完成 2026-08-21；仅 Linux 连续录屏仍缺。）
 - 真人仅凭 README 从干净副本完成 demo，卡点和修订有记录。
 - Day 7、Day 8、Day 9 报告与最新证据一致，不把低层证据冒充高层证据。
 - 当前 HEAD 的普通测试、适用环境下的 race、vet、module verify 和 diff 检查完成；所有 skip 和环境限制被单列说明。
