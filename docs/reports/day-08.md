@@ -18,7 +18,7 @@
 | Windows/Linux 脚本 | 显式 mode、依赖检查、Go cache 参数 | 完成 |
 | 干净副本 demo | 不依赖 Git/缓存/旧数据启动并预览 PDF | 完成 |
 | 真人同学只看 README | 记录耗时、卡点、修订和复测 | 未完成 |
-| Windows/Linux 系统队列录屏 | 安全目标、队列证据和连续录像 | Windows 已于 2026-08-21 补验完成；Linux 队列证据已于 2026-08-21 补齐（连续录屏仍缺） |
+| Windows/Linux 系统队列录屏 | 安全目标、队列证据和连续录像 | 已于 2026-08-21 双平台补验完成 |
 | Linux/CUPS runtime | `lp/lpstat`、request id 和队列记录 | 已于 2026-08-21 补验完成 |
 
 ## 干净副本验收
@@ -92,13 +92,14 @@
 - 真实 Linux 内核回归：`go test ./...`、`go test -race ./...`、`go vet`、`go mod verify` 全部通过。
 - platform 模式端到端：枚举 CUPS 队列；中文气球任务 `07381f3ef5c6b9e2a73b86b34ad402d3` `queued -> succeeded`（attempts=1）；CUPS request id `iso-queue-8`（`lpstat -W all` 记录）；隔离输出 32362 字节 PDF；preview HTTP 200；SIGINT 优雅退出。
 - 证据文件：`docs/reports/assets/linux-platform-evidence-2026-08-21.md`、`linux-iso-output-2026-08-21.pdf`。
-- 边界说明：证明 Linux runtime 与系统队列接受（含 request id），不等于物理出纸；环境为 WSL2，如实标注；Linux 连续录屏仍待补。
+- 连续录屏（约 3 分 30 秒，`linux-platform-queue-2026-08-21.mp4`，因仓库体积限制不入版本控制）：覆盖环境信息、platform 启动、health、枚举、提交、状态、预览、隔离输出与 request id、优雅停止；录屏任务 `01d82152c37ba29a278d65c0c6544886`，request id `iso-queue-9`。
+- 边界说明：证明 Linux runtime 与系统队列接受（含 request id），不等于物理出纸；环境为 WSL2，如实标注。
 
 ## AI 沟通与自检
 
 Codex 只读审查曾作为“陌生读者”检查 README。最初容易把“代理未发现问题”写成“他人启动验收完成”；加入“必须是真人、只看 README、记录原话卡点和同一人复测”的约束后，报告把代理审查降回自动文档检查，并将真人验收保留为未完成。这一修正提高了证据可信度。
 
-自检结果：范围、依赖、接口、安全、日志和异常处理与代码一致；README demo 已在干净副本复现；Windows 系统队列录屏与 Linux/CUPS runtime（含 request id）已于 2026-08-21 补验完成；真人启动和 Linux 录屏没有被替代或虚构。
+自检结果：范围、依赖、接口、安全、日志和异常处理与代码一致；README demo 已在干净副本复现；Windows/Linux 系统队列录屏与 Linux/CUPS runtime（含 request id）已于 2026-08-21 双平台补验完成；真人启动没有被替代或虚构。
 
 ## 第 9 天计划
 

@@ -37,6 +37,18 @@
 7. `GET /api/v1/print-jobs/{id}/preview` 返回 HTTP 200，50869 字节。
 8. 向进程组发送 SIGINT 后服务优雅退出，端口 17653 关闭（health 连接被拒）。
 
+## 连续录屏主路径（20:25，对应 `linux-platform-queue-2026-08-21.mp4`）
+
+录屏展示环境信息（内核、发行版、Go、CUPS 队列枚举）、platform 启动、health 探活、打印机枚举、气球任务提交、状态查询、PDF 预览、隔离队列输出文件与 request id 历史、优雅停止（Ctrl+C 后 health 连接被拒）。录制时长约 3 分 30 秒，原始文件 255,159,530 字节（因仓库体积限制不入版本控制，与 Windows 段同规则）。
+
+录屏中的实际任务：
+
+- 任务 ID：`01d82152c37ba29a278d65c0c6544886`（balloon_ticket，printer_name=`iso-queue`，队伍"星辰队"，题号 C）。
+- 状态：`succeeded`，attempts=1，created 2026-08-21T12:25:33.96Z，finished 2026-08-21T12:25:34.46Z。
+- CUPS request id：`iso-queue-9`（`lpstat -W all` 记录，20:25:34）。
+- 隔离输出：print-iso 隔离目录下的 `preview.pdf` 32108 字节（20:25）。
+- 持久化记录：`data/jobs.json` 与 `data/jobs/01d82152c37ba29a278d65c0c6544886/preview.pdf`。
+
 ## 措辞边界
 
 - 该证据链（真实 Linux 内核 + 真实 `lp`/`lpstat` 调用 + CUPS request id + 隔离输出文件）证明 Linux 平台 runtime 与系统队列接受，不等于物理出纸。

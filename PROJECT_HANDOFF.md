@@ -12,7 +12,8 @@
 - **代码与默认安全演示主路径已完成。** 两类任务、PDF、7 个 HTTP 接口、嵌入式 Web、JSON 持久化、单 Worker FIFO、失败原因、失败重试、Windows/Linux Adapter 和启动文档均已存在。
 - **Windows platform runtime 已于 2026-08-21 补验完成**（原 P0-A）：隔离安全队列 `ISO-PDF-Queue` 上真实调用 SumatraPDF 3.6.1，系统队列接受并落盘隔离 PDF，连续录屏与结构化证据见 `docs/reports/assets/windows-platform-evidence-2026-08-21.md`。
 - **Linux/CUPS runtime 已于 2026-08-21 补验完成**（原 P0-B）：WSL2 Ubuntu 24.04.4（真实 Linux 内核）全量测试与 race 通过；platform 模式真实调用 `lp`/`lpstat`，取得 CUPS request id `iso-queue-8` 并落盘隔离 PDF；证据见 `docs/reports/assets/linux-platform-evidence-2026-08-21.md`。
-- **课程完整人工验收仍剩两项：** Linux platform 连续录屏（P0-C 的 Linux 段）与真人只读 README 的冷启动测试（P1-A）。
+- **双平台连续录屏已于 2026-08-21 补验完成**（原 P0-C）：Windows 段约 4 分 13 秒、Linux 段约 3 分 30 秒，均含环境、启动、探活、枚举、提交、状态、预览、队列证据与安全退出；视频不入版本控制，保存于 `docs/reports/assets/` 本机路径。
+- **课程完整人工验收仅剩一项：** 真人只读 README 的冷启动测试（P1-A）。
 
 接手后应优先补齐证据，不要先扩展范围。默认 `demo` 模式不会进入系统打印队列；只有显式 `platform` 模式才可能提交平台打印命令。
 
@@ -137,9 +138,11 @@ failed --retry--> queued
 
 **禁止误报：** Windows 上的 `linux/amd64` 交叉编译不能写成 Linux/CUPS runtime 通过。
 
-### P0-C：双平台课程证据整理
+### P0-C：双平台课程证据整理（2026-08-21 已完成）
 
-**目标：** 形成 Windows、Linux 各一段可从头复核的连续录像和配套文字记录。
+**完成记录：** Windows 段录屏 `windows-platform-queue-2026-08-21.mp4`（约 4 分 13 秒，任务 `97654d58a864b473735d097571ba6b15`）；Linux 段录屏 `linux-platform-queue-2026-08-21.mp4`（约 3 分 30 秒，任务 `01d82152c37ba29a278d65c0c6544886`，request id `iso-queue-9`）。两段均覆盖系统信息、依赖版本、启动命令、health、打印机枚举、任务提交与状态、preview、队列证据（隔离输出文件与 request id）和安全退出；Day 7–9 报告已回填。两个视频因仓库体积限制不入版本控制（`.gitignore` 排除 `*.mp4`），永久保存于 `docs/reports/assets/` 本机路径。措辞边界：双平台证据均为"系统队列接受 + 隔离输出"，不宣称物理出纸。
+
+**原始目标（存档）：** 形成 Windows、Linux 各一段可从头复核的连续录像和配套文字记录。
 
 **先读/可能修改：** `docs/demo-script.md`、`docs/reports/day-07.md`、`docs/reports/day-08.md`、`docs/reports/day-09-final.md`。
 
@@ -262,7 +265,7 @@ git diff --check
 2. 检查 Git 状态，运行普通测试，记录当前基线；不要先改代码。
 3. ~~准备并确认 Windows 安全虚拟/隔离队列，完成 P0-A。~~（已完成，2026-08-21。）
 4. ~~在真实 Linux/CUPS 环境完成 P0-B。~~（已完成，2026-08-21，WSL2。）
-5. 按 P0-C 整理双平台连续录屏并回填 Day 7–9（Windows 段已有，仅缺 Linux 段录屏）。
+5. ~~按 P0-C 整理双平台连续录屏并回填 Day 7–9。~~（已完成，2026-08-21。）
 6. 邀请真人执行 README 冷启动，完成 P1-A。
 7. 只有证据流程稳定且确有收益时，再评估 P1-B；课程验收前不做 P2。
 8. 每完成一项，运行相关测试和全量普通测试，复核 diff，再提交小而清晰的 commit。
@@ -272,7 +275,7 @@ git diff --check
 只有同时满足以下条件，才能把课程交付状态从“部分完成”改为“完整完成”：
 
 - ~~Windows 安全队列 runtime、系统队列接受和连续录屏已有可审计证据。~~（已完成，2026-08-21。）
-- ~~Linux/CUPS runtime、request id、系统队列结果和连续录屏已有可审计证据。~~（runtime、request id 与系统队列结果已完成 2026-08-21；仅 Linux 连续录屏仍缺。）
+- ~~Linux/CUPS runtime、request id、系统队列结果和连续录屏已有可审计证据。~~（已完成，2026-08-21，含 request id `iso-queue-8`/`iso-queue-9` 与双平台录屏。）
 - 真人仅凭 README 从干净副本完成 demo，卡点和修订有记录。
 - Day 7、Day 8、Day 9 报告与最新证据一致，不把低层证据冒充高层证据。
 - 当前 HEAD 的普通测试、适用环境下的 race、vet、module verify 和 diff 检查完成；所有 skip 和环境限制被单列说明。

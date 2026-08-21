@@ -92,4 +92,5 @@ Day 7 记录的「Linux/CUPS 仅交叉编译、无 Linux runtime」缺口已按 
 - 自动回归在真实 Linux 内核执行：`go test ./...`、`go test -race ./...`（cgo+gcc）、`go vet`、`go mod verify` 全部通过；`internal/printer` Linux build-tag 测试不再是交叉编译验证。
 - platform 模式端到端：枚举到 `iso-queue` 与 `PDF` 两个 CUPS 队列；中文气球任务 `07381f3ef5c6b9e2a73b86b34ad402d3` 经 `queued -> succeeded`（attempts=1）；CUPS request id 证据 `iso-queue-8`（`lpstat -W all`）；隔离输出 print-iso 目录下的 `preview.pdf` 32362 字节（`%PDF-`）；preview HTTP 200；SIGINT 优雅退出后端口关闭。
 - 证据文件：`docs/reports/assets/linux-platform-evidence-2026-08-21.md`（结构化记录）、`docs/reports/assets/linux-iso-output-2026-08-21.pdf`（队列产出副本）。
+- 连续录屏约 3 分 30 秒（`linux-platform-queue-2026-08-21.mp4`，因仓库体积限制不入版本控制，本机 assets 目录播放），录屏任务 `01d82152c37ba29a278d65c0c6544886`，CUPS request id `iso-queue-9`，隔离输出 32108 字节。
 - 措辞边界：证明 Linux 平台 runtime 与 CUPS 系统队列接受（含 request id）及隔离输出，不等于物理出纸；运行环境为 WSL2，非物理机，如实标注。
